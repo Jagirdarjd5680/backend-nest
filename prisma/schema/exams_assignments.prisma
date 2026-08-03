@@ -1,0 +1,146 @@
+model Exam {
+  id           Int       @id @default(autoincrement())
+  title        String
+  description  String?   @db.Text
+  duration     Int       @default(60)
+  totalMarks   Float     @default(100)
+  passingMarks Float     @default(40)
+  startDate    DateTime? @default(now())
+  endDate      DateTime?
+  isPublished  Boolean   @default(true)
+  moduleId     Int?
+  courseId     Int?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @default(now()) @updatedAt
+
+  createdBy     Int?
+  createdByUser User? @relation("ExamCreatorRelation", fields: [createdBy], references: [id], onDelete: SetNull)
+
+  questions Question[]
+  results   ExamResult[]
+  unlocks   ExamUnlock[]
+
+  @@map("exams")
+}
+
+model ExamResult {
+  id         Int      @id @default(autoincrement())
+  score      Float    @default(0)
+  maxScore   Float    @default(100)
+  passed     Boolean  @default(false)
+  submitTime DateTime @default(now())
+  answers    Json?
+  createdAt  DateTime @default(now())
+
+  studentId Int
+  student   User @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  examId    Int
+  exam      Exam @relation(fields: [examId], references: [id], onDelete: Cascade)
+
+  @@map("exam_results")
+}
+
+// In-progress attempt state (answers so far, marked-for-review, visited questions,
+// current question index) — saved as the student goes so leaving mid-exam and coming
+// back (even on a different device) resumes exactly where they left off. Cleared once
+// the attempt is actually submitted (see ExamsService.submitExam).
+model ExamProgress {
+  id           Int      @id @default(autoincrement())
+  examId       Int
+  studentId    Int
+  answers      Json?
+  marked       Json?
+  visited      Json?
+  currentIndex Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([examId, studentId])
+  @@map("exam_progress")
+}
+
+model ExamUnlock {
+  id         Int      @id @default(autoincrement())
+  unlockedAt DateTime @default(now())
+  batchId    Int?
+
+  studentId Int
+  student   User @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  examId    Int
+  exam      Exam @relation(fields: [examId], references: [id], onDelete: Cascade)
+
+  @@map("exam_unlocks")
+}
+
+model Question {
+  id            Int      @id @default(autoincrement())
+  text          String   @db.Text
+  options       String   @db.Text
+  correctOption String
+  marks         Float    @default(1)
+  explanation   String?  @db.Text
+  category      String?
+  isDeleted     Boolean  @default(false)
+  courseId      Int?
+  createdAt     DateTime @default(now())
+
+  examId Int?
+  exam   Exam? @relation(fields: [examId], references: [id], onDelete: SetNull)
+
+  @@map("questions")
+}
+
+model Assignment {
+  id             Int      @id @default(autoincrement())
+  title          String
+  description    String?  @db.Text
+  filePath       String?
+  dueDate        DateTime
+  totalMarks     Float    @default(100)
+  assignmentType String   @default("file_upload")
+  maxMb          Int      @default(10)
+  allowedFormats String   @default(".pdf,.zip,.jpg,.png")
+  attachments    Json?
+  isPublished    Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  courseId  Int?
+  teacherId Int?
+  batchId   Int?
+
+  unlocks     AssignmentUnlock[]
+  submissions AssignmentSubmission[]
+
+  @@map("assignments")
+}
+
+model AssignmentUnlock {
+  id         Int      @id @default(autoincrement())
+  unlockedAt DateTime @default(now())
+
+  studentId    Int
+  student      User       @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  assignmentId Int
+  assignment   Assignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+
+  @@map("assignment_unlocks")
+}
+
+model AssignmentSubmission {
+  id          Int      @id @default(autoincrement())
+  fileUrl     String?  @default("")
+  textAnswer  String?  @db.Text
+  quizAnswers Json?
+  submittedAt DateTime @default(now())
+  grade       Float?   @default(0)
+  feedback    String?  @db.Text
+  status      String   @default("pending")
+
+  studentId    Int
+  student      User       @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  assignmentId Int
+  assignment   Assignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+
+  @@map("assignment_submissions")
+}

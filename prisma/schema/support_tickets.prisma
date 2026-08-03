@@ -1,0 +1,29 @@
+model Ticket {
+  id        Int      @id @default(autoincrement())
+  subject   String
+  message   String   @db.Text
+  status    String   @default("open")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  userId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("tickets")
+}
+
+model LeaveRequest {
+  id           Int      @id @default(autoincrement())
+  startDate    DateTime
+  endDate      DateTime
+  reason       String   @db.Text
+  status       String   @default("pending")
+  adminMessage String?  @db.Text
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  userId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("leave_requests")
+}

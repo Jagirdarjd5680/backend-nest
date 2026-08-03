@@ -1,0 +1,200 @@
+model Banner {
+  id          Int      @id @default(autoincrement())
+  name        String   @default("")
+  imageUrl    String
+  linkType    String   @default("none")
+  linkId      Int?
+  externalUrl String?  @default("")
+  order       Int      @default(0)
+  status      String   @default("draft")
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  createdById Int?
+  createdBy   User? @relation("BannerCreatorRelation", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@map("banners")
+}
+
+model Blog {
+  id         Int      @id @default(autoincrement())
+  title      String
+  content    String   @db.Text
+  author     String
+  category   String?
+  thumbnail  String?
+  status     String   @default("draft")
+  isFeatured Boolean  @default(false)
+  excerpt    String?  @db.Text
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@map("blogs")
+}
+
+model AppReview {
+  id           Int      @id @default(autoincrement())
+  rating       Int
+  review       String   @db.Text
+  name         String?
+  profileImage String?  @default("")
+  status       String   @default("active")
+  videoUrl     String?  @default("")
+  thumbnail    String?  @default("")
+  aspectRatio  String   @default("16:9")
+  createdAt    DateTime @default(now())
+
+  userId Int?
+  user   User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("app_reviews")
+}
+
+model Review {
+  id        Int      @id @default(autoincrement())
+  rating    Int
+  comment   String   @db.Text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  courseId Int
+  course   Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  userId   Int
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // One review per student per course — same account on web or the app edits the same row
+  // rather than creating a duplicate.
+  @@unique([userId, courseId])
+  @@map("reviews")
+}
+
+model FreeMaterial {
+  id        Int      @id @default(autoincrement())
+  title     String
+  type      String   @default("pdf")
+  url       String   @db.Text
+  createdAt DateTime @default(now())
+
+  @@map("free_materials")
+}
+
+model NewsTicker {
+  id        Int      @id @default(autoincrement())
+  text      String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  @@map("news_ticker")
+}
+
+model Notification {
+  id            Int      @id @default(autoincrement())
+  title         String
+  message       String   @db.Text
+  type          String   @default("info")
+  recipientRole String   @default("all")
+  recipients    Json?
+  isRead        Boolean  @default(false)
+  isSent        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+
+  @@map("notifications")
+}
+
+model Certificate {
+  id            Int      @id @default(autoincrement())
+  title         String   @default("Course Completion Certificate")
+  certificateId String   @unique @default("")
+  pin           String   @default("")
+  pdfUrl        String   @default("")
+  issueDate     DateTime @default(now())
+
+  userId   Int
+  user     User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  courseId Int?
+  course   Course? @relation(fields: [courseId], references: [id], onDelete: SetNull)
+
+  @@map("certificates")
+}
+
+model Event {
+  id          Int      @id @default(autoincrement())
+  title       String
+  description String   @db.Text
+  date        DateTime
+  price       Float    @default(0)
+  createdAt   DateTime @default(now())
+
+  bookings EventBooking[]
+
+  @@map("events")
+}
+
+model EventBooking {
+  id        Int      @id @default(autoincrement())
+  createdAt DateTime @default(now())
+
+  userId  Int
+  user    User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  eventId Int
+  event   Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  // "pending_payment" (paid event, checkout not completed yet) | "confirmed" (free event,
+  // or paid event with a verified payment) | "cancelled"
+  status            String    @default("confirmed")
+  ticketCode        String?   @unique
+  razorpayOrderId   String?
+  razorpayPaymentId String?
+  amountPaid        Float     @default(0)
+  ticketEmailedAt   DateTime?
+
+  @@map("event_bookings")
+}
+
+model PassedStudent {
+  id          Int      @id @default(autoincrement())
+  name        String
+  year        Int?
+  description String?  @db.Text
+  achievement String?
+  image       String?
+  images      Json?
+  videos      Json?
+  isPublished Boolean  @default(true)
+  showInApp   Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  @@map("passed_students")
+}
+
+model Placement {
+  id          Int      @id @default(autoincrement())
+  studentName String
+  company     String
+  package     String?
+  createdAt   DateTime @default(now())
+
+  @@map("placements")
+}
+
+model Resume {
+  id        Int      @id @default(autoincrement())
+  filePath  String
+  createdAt DateTime @default(now())
+
+  userId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("resumes")
+}
+
+model Settings {
+  id        Int      @id @default(autoincrement())
+  key       String   @unique
+  value     String   @db.Text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("settings")
+}

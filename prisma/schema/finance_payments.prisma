@@ -1,0 +1,66 @@
+model Payment {
+  id                Int      @id @default(autoincrement())
+  amount            Float
+  discountAmount    Float    @default(0)
+  couponCode        String?  @default("")
+  status            String   @default("pending")
+  razorpayOrderId   String?  @default("")
+  razorpayPaymentId String?  @default("")
+  razorpaySignature String?  @default("")
+  receiptUrl        String?  @default("")
+  createdAt         DateTime @default(now())
+
+  userId   Int
+  user     User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  courseId Int?
+  course   Course? @relation(fields: [courseId], references: [id], onDelete: SetNull)
+
+  @@map("payments")
+}
+
+model FeeRecord {
+  id          Int      @id @default(autoincrement())
+  amountPaid  Float
+  paymentDate DateTime @default(now())
+
+  studentId Int
+  student   User @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@map("fee_records")
+}
+
+model CreditTransaction {
+  id          Int      @id @default(autoincrement())
+  amount      Float
+  type        String
+  description String
+  createdAt   DateTime @default(now())
+
+  userId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("credit_transactions")
+}
+
+model Coupon {
+  id                Int       @id @default(autoincrement())
+  code              String    @unique
+  discount          Float
+  expiry            DateTime
+  description       String?   @db.Text
+  discountType      String    @default("flat")
+  discountValue     Float     @default(0)
+  minPurchaseAmount Float     @default(0)
+  maxDiscountAmount Float?
+  startDate         DateTime?
+  endDate           DateTime?
+  usageLimit        Int?
+  usedCount         Int       @default(0)
+  perUserLimit      Int       @default(1)
+  applicableType    String    @default("all")
+  applicableIds     Json?
+  isActive          Boolean   @default(true)
+  createdAt         DateTime  @default(now())
+
+  @@map("coupons")
+}

@@ -1,0 +1,46 @@
+model Tutor {
+  id           Int      @id @default(autoincrement())
+  charges      Float    @default(0)
+  earnings     Float    @default(0)
+  status       String   @default("offline")
+  tutorProfile Json?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  userId Int  @unique
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  withdrawals Withdrawal[]
+
+  @@map("tutors")
+}
+
+model Withdrawal {
+  id            Int      @id @default(autoincrement())
+  amount        Float
+  status        String   @default("pending")
+  upiId         String   @default("")
+  transactionId String?  @default("")
+  adminNote     String?  @db.Text
+  proofImage    String?  @db.Text
+  createdAt     DateTime @default(now())
+
+  tutorId Int
+  tutor   Tutor @relation(fields: [tutorId], references: [id], onDelete: Cascade)
+
+  @@map("withdrawals")
+}
+
+model SupportSession {
+  id             Int      @id @default(autoincrement())
+  title          String   @default("Support Session")
+  status         String   @default("pending")
+  studentId      Int?
+  googleMeetLink String?  @db.Text
+  scheduledAt    DateTime @default(now())
+  createdAt      DateTime @default(now())
+
+  tutorId Int
+
+  @@map("support_sessions")
+}

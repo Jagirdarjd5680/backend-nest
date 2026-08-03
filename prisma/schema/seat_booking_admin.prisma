@@ -1,0 +1,40 @@
+// Standalone "reading room" seat booking feature (admin-managed batches with a
+// fixed live/practice seat layout, plus public seat requests). Deliberately
+// separate from `Batch`/`BookingBatch`/`SeatBooking` (the course-enrollment
+// booking models) — those track course-batch enrollment capacity, this tracks
+// physical classroom seats for walk-in/public seat reservation.
+model SeatBookingBatch {
+  id         Int      @id @default(autoincrement())
+  name       String
+  startDate  DateTime
+  startTime  String
+  endTime    String
+  totalSeats Int      @default(10)
+  zones      Json?
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  requests SeatBookingRequest[]
+
+  @@map("seat_booking_batches")
+}
+
+model SeatBookingRequest {
+  id         Int      @id @default(autoincrement())
+  userId     Int?
+  userName   String
+  userEmail  String?
+  userPhone  String?
+  seatNumber Int
+  zone       String
+  status     String   @default("pending")
+  ipAddress  String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  batchId Int
+  batch   SeatBookingBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@map("seat_booking_requests")
+}

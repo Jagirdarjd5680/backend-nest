@@ -1,0 +1,45 @@
+model Referral {
+  id                Int      @id @default(autoincrement())
+  points            Int      @default(0)
+  status            String   @default("pending")
+  rewardAmount      Float    @default(0)
+  rewardDistributed Boolean  @default(false)
+  createdAt         DateTime @default(now())
+
+  referrerId Int
+  referrer   User @relation("ReferrerRelation", fields: [referrerId], references: [id], onDelete: Cascade)
+  referredId Int
+  referred   User @relation("ReferredRelation", fields: [referredId], references: [id], onDelete: Cascade)
+
+  @@map("referrals")
+}
+
+model ReferralJoinRequest {
+  id           Int       @id @default(autoincrement())
+  status       String    @default("pending")
+  adminMessage String?   @db.Text
+  processedAt  DateTime?
+  createdAt    DateTime  @default(now())
+
+  userId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("referral_join_requests")
+}
+
+model WithdrawRequest {
+  id            Int      @id @default(autoincrement())
+  amount        Float
+  points        Int      @default(0)
+  upiId         String   @default("")
+  status        String   @default("pending")
+  transactionId String?  @default("")
+  screenshot    String?  @db.Text
+  adminNote     String?  @db.Text
+  createdAt     DateTime @default(now())
+
+  userId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("withdraw_requests")
+}

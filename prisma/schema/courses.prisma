@@ -1,0 +1,99 @@
+model Category {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  slug      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  courses   Course[]
+
+  @@map("categories")
+}
+
+model Course {
+  id                       Int      @id @default(autoincrement())
+  title                    String
+  description              String   @db.Text
+  thumbnail                String   @default("")
+  price                    Float    @default(0)
+  originalPrice            Float    @default(0)
+  level                    String   @default("beginner")
+  isPublished              Boolean  @default(false)
+  durationValue            Float    @default(0)
+  durationUnit             String   @default("months")
+  readingDurationValue     Float    @default(0)
+  readingDurationUnit      String   @default("hours")
+  demoVideoUrl             String   @default("")
+  isCertificate            Boolean  @default(false)
+  certificateName          String   @default("")
+  gstType                  String   @default("none")
+  gstPercent               Float    @default(0)
+  fakeLikes                Int      @default(0)
+  courseType               String   @default("online")
+  allowOtherBatchMaterials Boolean  @default(false)
+  // Which platform(s) this course may be accessed from: "web" | "app" | "both".
+  // Enforced in CoursesService (course detail/lecture/progress endpoints) by
+  // reading the `X-Platform` header the frontend/native-app send on every
+  // request — see backend_nestjs/src/common/platform.ts.
+  platformAccess           String   @default("both")
+  modules                  Json?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  // Foreign keys
+  categoryId   Int
+  category     Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  instructorId Int
+  instructor   User     @relation("InstructorRelation", fields: [instructorId], references: [id], onDelete: Cascade)
+
+  // Relations
+  lessons      Lesson[]
+  batches      Batch[]
+  enrollments  Enrollment[]
+  reviews      Review[]
+  payments     Payment[]
+  certificates Certificate[]
+  liveClasses  LiveClass[]
+
+  @@map("courses")
+}
+
+model Lesson {
+  id          Int      @id @default(autoincrement())
+  title       String
+  description String?  @db.Text
+  type        String   @default("video")
+  url         String?  @db.Text
+  duration    Int      @default(0)
+  freePreview Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  courseId Int
+  course   Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  @@map("lessons")
+}
+
+model Enrollment {
+  id        Int      @id @default(autoincrement())
+  createdAt DateTime @default(now())
+
+  userId   Int
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  courseId Int
+  course   Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, courseId])
+  @@map("enrollments")
+}
+
+model CourseProgress {
+  id               Int      @id @default(autoincrement())
+  studentId        Int
+  courseId         Int
+  completedLessons String   @db.Text
+  updatedAt        DateTime @updatedAt
+
+  @@unique([studentId, courseId])
+  @@map("course_progress")
+}

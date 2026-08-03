@@ -1,0 +1,116 @@
+model Batch {
+  id          Int       @id @default(autoincrement())
+  name        String
+  startDate   DateTime
+  endDate     DateTime?
+  timing      String
+  isActive    Boolean   @default(true)
+  maxStudents Int       @default(50)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  courseId Int
+  course   Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  // Relations
+  attendances    Attendance[]
+  materials      BatchMaterial[]
+  bookingBatches BookingBatch[]
+  seatBookings   SeatBooking[]
+  timetables     Timetable[]
+
+  @@map("batches")
+}
+
+model BatchMaterial {
+  id        Int      @id @default(autoincrement())
+  title     String
+  type      String   @default("file")
+  filePath  String
+  createdAt DateTime @default(now())
+
+  batchId Int
+  batch   Batch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  parentId Int?
+  parent   BatchMaterial?  @relation("MaterialHierarchy", fields: [parentId], references: [id], onDelete: Cascade)
+  children BatchMaterial[] @relation("MaterialHierarchy")
+
+  @@map("batch_materials")
+}
+
+model BookingBatch {
+  id        Int      @id @default(autoincrement())
+  createdAt DateTime @default(now())
+
+  userId  Int
+  user    User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  batchId Int
+  batch   Batch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@map("booking_batches")
+}
+
+model SeatBooking {
+  id         Int      @id @default(autoincrement())
+  status     String   @default("pending")
+  seatNumber String?
+  createdAt  DateTime @default(now())
+
+  userId  Int
+  user    User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  batchId Int
+  batch   Batch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@map("seat_bookings")
+}
+
+model Attendance {
+  id     Int      @id @default(autoincrement())
+  date   DateTime
+  status String   @default("present")
+
+  studentId Int
+  student   User  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  batchId   Int
+  batch     Batch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@unique([studentId, batchId, date])
+  @@map("attendances")
+}
+
+model Timetable {
+  id        Int      @id @default(autoincrement())
+  day       String
+  topic     String
+  startTime String?
+  endTime   String?
+  teacherId Int?
+  courseId  Int?
+  createdAt DateTime @default(now())
+
+  batchId Int
+  batch   Batch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@map("timetables")
+}
+
+model LiveClass {
+  id           Int      @id @default(autoincrement())
+  title        String
+  description  String?  @db.Text
+  meetingLink  String
+  scheduledAt  DateTime @default(now())
+  durationMins Int      @default(60)
+  status       String   @default("scheduled")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  courseId Int
+  course   Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  batchId  Int?
+
+  @@index([courseId])
+  @@map("live_classes")
+}

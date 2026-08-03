@@ -1,0 +1,30 @@
+model Media {
+  id                 String   @id @default(uuid())
+  name               String
+  title              String?
+  url                String
+  fileUrl            String?
+  videoId            String?  @unique
+  thumbnailUrl       String?
+  spriteUrl          String?
+  duration           Float?
+  masterPlaylistUrl  String?
+  hlsKeyId           String?
+  type               String   @default("raw")
+  format             String?
+  size               BigInt?
+  uploadedById       String?
+  courseId           String?
+  status             String   @default("ready")
+  uploadId           String?  @unique
+  totalChunks        Int?
+  uploadedChunks     Int?
+  jobId              String?
+  failureReason      String?
+  isChatMedia        Boolean  @default(false)
+  processingProgress Int      @default(0)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@map("media")
+}

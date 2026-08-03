@@ -1,0 +1,36 @@
+// Single-active-device enforcement for student accounts: each login creates
+// one row here (tokenId = the JWT's jti). JwtStrategy checks this row is
+// still un-revoked on every request, so kicking a device is real (the old
+// token stops working immediately), not just a polite client-side message.
+model UserSession {
+  id            Int       @id @default(autoincrement())
+  userId        Int
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenId       String    @unique
+  deviceId      String
+  deviceLabel   String?
+  ip            String?
+  createdAt     DateTime  @default(now())
+  lastSeenAt    DateTime  @default(now())
+  revokedAt     DateTime?
+  revokedReason String?
+
+  @@index([userId])
+  @@map("user_sessions")
+}
+
+// Audit trail behind the "Account Activities" admin tab — every login and
+// every forced logout (another device signing in) gets a row here.
+model LoginActivity {
+  id          Int      @id @default(autoincrement())
+  userId      Int
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  event       String // "login" | "forced_logout" | "blocked" | "unblocked"
+  deviceId    String?
+  deviceLabel String?
+  ip          String?
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+  @@map("login_activities")
+}
