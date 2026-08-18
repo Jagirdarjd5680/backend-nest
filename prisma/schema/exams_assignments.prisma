@@ -129,7 +129,7 @@ model AssignmentUnlock {
 
 model AssignmentSubmission {
   id          Int      @id @default(autoincrement())
-  fileUrl     String?  @default("")
+  fileUrl     String?  @db.Text
   textAnswer  String?  @db.Text
   quizAnswers Json?
   submittedAt DateTime @default(now())

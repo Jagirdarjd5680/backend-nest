@@ -34,6 +34,34 @@ export class CreateUserDto {
   @IsOptional()
   isActive?: boolean;
 
+  @IsString()
+  @IsOptional()
+  source?: string;
+
+  @IsString()
+  @IsOptional()
+  authMethod?: string;
+
+  @IsString()
+  @IsOptional()
+  permissions?: string;
+
+  @IsOptional()
+  moduleAccess?: string[];
+
   @IsOptional()
   modulePermissions?: Record<string, Record<string, boolean>>;
+
+  @IsBoolean()
+  @IsOptional()
+  autoGeneratePassword?: boolean;
+
+  // Course/batch assignment — whitelist: true on the global ValidationPipe silently drops
+  // any field not declared here, which is why "assign courses" used to look like it saved
+  // (toast success, no error) but the enrollment/batch rows were never actually written.
+  @IsOptional()
+  enrolledCourses?: unknown[];
+
+  @IsOptional()
+  batches?: unknown[];
 }

@@ -1,5 +1,6 @@
-import { Controller, Get, Post, Put, Delete, Query, UseGuards, Param, Body, Request, ForbiddenException } from '@nestjs/common';
+import { Controller, Get, Post, Put, Delete, Query, UseGuards, Param, Body, Request, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { UsersService } from './users.service';
+import { FeeRecordsService } from '../fee-records/fee-records.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
@@ -11,7 +12,10 @@ import { UpdateUserDto } from './dto/update-user.dto';
 @Controller('users')
 @UseGuards(JwtAuthGuard)
 export class UsersController {
-  constructor(private usersService: UsersService) {}
+  constructor(
+    private usersService: UsersService,
+    private feeRecordsService: FeeRecordsService,
+  ) {}
 
   @Get('bin/count')
   @UseGuards(RolesGuard)
@@ -54,6 +58,14 @@ export class UsersController {
     return { success: true, data: result, message: `${result.count} users moved to recycle bin` };
   }
 
+  @Get('face-registrations')
+  @UseGuards(RolesGuard)
+  @Roles('admin')
+  async getFaceRegistrations() {
+    const data = await this.usersService.getFaceRegistrations();
+    return { success: true, data };
+  }
+
   @Get()
   @UseGuards(RolesGuard, ModulePermissionsGuard)
   @Roles('admin', 'teacher')
@@ -93,7 +105,14 @@ export class UsersController {
   @UseGuards(RolesGuard)
   @Roles('admin')
   async getSubmissions(@Param('id') id: string) {
-    return { success: true, data: [] };
+    return this.usersService.getSubmissionsForUser(parseInt(id, 10));
+  }
+
+  @Put(':id/set-password')
+  @UseGuards(RolesGuard)
+  @Roles('admin')
+  async setPassword(@Param('id') id: string, @Body() body: { password: string }) {
+    return this.usersService.setPassword(parseInt(id, 10), body.password);
   }
 
   @Put(':id/student-profile-admin')
@@ -122,7 +141,14 @@ export class UsersController {
   @UseGuards(RolesGuard)
   @Roles('admin')
   async resendRegistrationLetter(@Param('id') id: string) {
-    return { success: true, message: 'Registration letter sent' };
+    const userId = parseInt(id, 10);
+    // No dedicated "primary course" concept — resend for whichever course this student
+    // enrolled in most recently, which is the one most likely relevant right now.
+    const latestEnrollment = await this.usersService.findLatestEnrollmentCourseId(userId);
+    if (!latestEnrollment) {
+      throw new BadRequestException('This student has no enrolled course to generate a registration letter for.');
+    }
+    return this.feeRecordsService.sendRegistrationLetterEmail(userId, latestEnrollment);
   }
 
   @Get(':id')

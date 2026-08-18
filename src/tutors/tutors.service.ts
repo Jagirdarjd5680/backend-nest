@@ -59,7 +59,7 @@ export class TutorsService {
   }
 
   async create(data: any) {
-    let { userId, name, email, phone, skills, experience, description, perConversation, defaultDuration, googleMeetEnabled, status, password, minWithdrawal, tutorId } = data;
+    let { userId, name, email, phone, skills, experience, description, perConversation, defaultDuration, googleMeetEnabled, status, password, minWithdrawal, tutorId, tokensPerSession, sessionDurationMinutes } = data;
 
     // If userId is not provided, find by email or create a new user
     if (!userId) {
@@ -104,6 +104,8 @@ export class TutorsService {
         charges: perConvFloat,
         status: status || 'offline',
         tutorProfile,
+        tokensPerSession: parseInt(tokensPerSession, 10) || 20,
+        sessionDurationMinutes: parseInt(sessionDurationMinutes, 10) || 10,
       },
     });
 
@@ -114,7 +116,7 @@ export class TutorsService {
     const t = await this.prisma.tutor.findUnique({ where: { id } });
     if (!t) throw new NotFoundException(`Tutor with ID ${id} not found`);
 
-    let { name, email, phone, skills, experience, description, perConversation, defaultDuration, googleMeetEnabled, status, password, minWithdrawal } = data;
+    let { name, email, phone, skills, experience, description, perConversation, defaultDuration, googleMeetEnabled, status, password, minWithdrawal, tokensPerSession, sessionDurationMinutes } = data;
 
     const perConvFloat = parseFloat(perConversation) || 0;
     const existingProfile = (t.tutorProfile as any) || {};
@@ -139,6 +141,8 @@ export class TutorsService {
         charges: perConvFloat || undefined,
         status: status || undefined,
         tutorProfile,
+        tokensPerSession: tokensPerSession !== undefined ? parseInt(tokensPerSession, 10) : undefined,
+        sessionDurationMinutes: sessionDurationMinutes !== undefined ? parseInt(sessionDurationMinutes, 10) : undefined,
       },
     });
 
@@ -169,14 +173,19 @@ export class TutorsService {
       include: {
         user: true,
         withdrawals: true,
+        supportSessions: { orderBy: { createdAt: 'desc' } },
       },
     });
     if (!t) throw new NotFoundException(`Tutor with ID ${id} not found`);
 
+    const completedSessions = t.supportSessions.filter((s) => s.status === 'completed');
+    const pendingApprovalSessions = completedSessions.filter((s) => s.earningApprovalStatus === 'pending');
+
     const stats = {
-      totalSessions: 0,
-      completedSessions: 0,
+      totalSessions: t.supportSessions.length,
+      completedSessions: completedSessions.length,
       totalEarnings: t.earnings || 0,
+      pendingTokens: pendingApprovalSessions.reduce((sum, s) => sum + (s.tokensCost ?? 0), 0),
       totalWithdrawn: t.withdrawals.filter(w => w.status === 'approved').reduce((acc, curr) => acc + curr.amount, 0),
     };
 
@@ -190,7 +199,7 @@ export class TutorsService {
         phone: t.user?.phone,
       },
       stats,
-      sessions: [],
+      sessions: t.supportSessions.map((s) => ({ ...s, _id: s.id.toString() })),
       withdrawals: t.withdrawals.map(w => ({ ...w, _id: w.id })),
     };
   }

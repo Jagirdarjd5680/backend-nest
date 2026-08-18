@@ -115,6 +115,12 @@ export class AuthController {
     return this.authService.applyReferralCode(req.user.id, body.code);
   }
 
+  @UseGuards(JwtAuthGuard)
+  @Post('skip-referral')
+  async skipReferral(@Request() req: any) {
+    return this.authService.skipReferralPrompt(req.user.id);
+  }
+
   // ─── Email Verification ──────────────────────────────────────────────────
   @Throttle(OTP_THROTTLE)
   @Post('verify-email')

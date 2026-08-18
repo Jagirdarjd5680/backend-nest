@@ -20,12 +20,31 @@ model Payment {
 
 model FeeRecord {
   id          Int      @id @default(autoincrement())
-  amountPaid  Float
+  // Legacy single-payment fields — kept for the handful of rows created before per-course,
+  // multi-installment tracking existed. New writes go through totalFee/finalFee/payments below.
+  amountPaid  Float    @default(0)
   paymentDate DateTime @default(now())
+
+  totalFee   Float   @default(0)
+  discount   Float   @default(0)
+  finalFee   Float   @default(0)
+  emiEnabled Boolean @default(false)
+  emiCount   Int     @default(1)
+  // Each entry: { amount, method, note, paidAt }. One FeeRecord per (student, course) — every
+  // installment/part-payment for that course's fee is appended here rather than creating a
+  // new row per payment.
+  payments   Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
 
   studentId Int
   student   User @relation(fields: [studentId], references: [id], onDelete: Cascade)
 
+  courseId Int?
+  course   Course? @relation(fields: [courseId], references: [id], onDelete: SetNull)
+
+  @@unique([studentId, courseId])
   @@map("fee_records")
 }
 

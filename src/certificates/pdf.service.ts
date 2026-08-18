@@ -2,9 +2,13 @@ import { Injectable } from '@nestjs/common';
 import * as PDFDocument from 'pdfkit';
 import * as fs from 'fs';
 import * as path from 'path';
+import { SettingsService } from '../settings/settings.service';
+import { drawCertificate, CertificateData } from '../common/pdf/certificateTemplate';
 
 @Injectable()
 export class PdfService {
+  constructor(private settingsService: SettingsService) {}
+
   async generateCertificatePDF(
     student: { name: string; email: string },
     course: { title: string; certificateName?: string },
@@ -18,13 +22,21 @@ export class PdfService {
     const fileName = `certificate_${meta.certificateId}_${Date.now()}.pdf`;
     const filePath = path.join(uploadDir, fileName);
 
-    return new Promise((resolve, reject) => {
-      const doc = new PDFDocument({
-        layout: 'landscape',
-        size: 'A4',
-        margin: 40,
-      });
+    const settings = await this.settingsService.getAllSettings();
+    const certData: CertificateData = {
+      companyName: settings?.general?.siteName || 'God of Graphics',
+      companyTagline: settings?.company?.tagline || 'Premier Academy for Multimedia & Computer Education',
+      logo: settings?.general?.pdfLogo || settings?.general?.siteLogo || '',
+      studentName: student.name,
+      courseName: course.certificateName || course.title,
+      issueDate: meta.issueDate,
+      certificateId: meta.certificateId,
+      signatureName: settings?.company?.signatoryName || undefined,
+      signatureImage: settings?.general?.pdfCertificateSignature || undefined,
+    };
 
+    return new Promise((resolve, reject) => {
+      const doc = new PDFDocument({ layout: 'landscape', size: 'A4', margin: 0 });
       const buffers: Buffer[] = [];
       doc.on('data', (chunk) => buffers.push(chunk));
       doc.on('end', () => {
@@ -32,83 +44,11 @@ export class PdfService {
         fs.writeFileSync(filePath, pdfBuffer);
         resolve({ fileName, filePath, pdfBuffer });
       });
-
       doc.on('error', (err) => reject(err));
 
-      // Border Frame
-      doc
-        .rect(20, 20, doc.page.width - 40, doc.page.height - 40)
-        .lineWidth(4)
-        .strokeColor('#1E3A8A')
-        .stroke();
-
-      doc
-        .rect(28, 28, doc.page.width - 56, doc.page.height - 56)
-        .lineWidth(1)
-        .strokeColor('#D97706')
-        .stroke();
-
-      // Title Header
-      doc
-        .moveDown(1.5)
-        .font('Helvetica-Bold')
-        .fontSize(28)
-        .fillColor('#1E3A8A')
-        .text('CERTIFICATE OF COMPLETION', { align: 'center' });
-
-      doc
-        .moveDown(0.5)
-        .font('Helvetica')
-        .fontSize(14)
-        .fillColor('#4B5563')
-        .text('This is to certify that', { align: 'center' });
-
-      // Student Name
-      doc
-        .moveDown(0.8)
-        .font('Helvetica-Bold')
-        .fontSize(24)
-        .fillColor('#D97706')
-        .text(student.name, { align: 'center' });
-
-      doc
-        .moveDown(0.5)
-        .font('Helvetica')
-        .fontSize(14)
-        .fillColor('#4B5563')
-        .text('has successfully completed the course', { align: 'center' });
-
-      // Course Title (admin's certificateName, when set, is what's meant to print here —
-      // falls back to the course's marketing title otherwise)
-      doc
-        .moveDown(0.8)
-        .font('Helvetica-Bold')
-        .fontSize(20)
-        .fillColor('#111827')
-        .text(course.certificateName || course.title, { align: 'center' });
-
-      // Details Footer
-      doc.moveDown(2);
-
-      const issueDateStr = meta.issueDate.toLocaleDateString('en-US', {
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric',
-      });
-
-      doc
-        .font('Helvetica')
-        .fontSize(10)
-        .fillColor('#6B7280')
-        .text(`Date of Issue: ${issueDateStr}`, 60, doc.page.height - 100);
-
-      doc
-        .text(`Certificate ID: ${meta.certificateId}`, { align: 'center' });
-
-      doc
-        .text(`Verification PIN: ${meta.pin}`, doc.page.width - 220, doc.page.height - 100);
-
-      doc.end();
+      drawCertificate(doc, certData)
+        .then(() => doc.end())
+        .catch(reject);
     });
   }
 }

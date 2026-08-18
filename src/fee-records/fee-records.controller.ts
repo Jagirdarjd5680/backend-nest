@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Delete, Param, Body, UseGuards, Res, Request } from '@nestjs/common';
+import { Controller, Get, Post, Put, Patch, Delete, Param, Body, UseGuards, Res, Request } from '@nestjs/common';
 import { FeeRecordsService } from './fee-records.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Response } from 'express';
@@ -16,48 +16,35 @@ export class FeeRecordsController {
   // ─── Specific routes FIRST (before :id parameter) ──────────────────────────
 
   @Post('download-receipt')
-  async downloadReceipt(@Request() req: any, @Body() body: { userId?: number; courseId?: number }, @Res() res: Response) {
+  async downloadReceipt(@Request() req: any, @Body() body: { userId?: number; courseId?: number; paymentIndex?: number }, @Res() res: Response) {
     const targetUserId = body.userId || req.user.id;
-    const { filePath, fileName } = await this.service.generateReceiptPdf(targetUserId, body.courseId);
+    const { filePath, fileName } = await this.service.generateReceiptPdf(targetUserId, body.courseId, body.paymentIndex);
     return res.download(filePath, fileName);
   }
 
   @Post('send-receipt')
-  async sendReceipt(@Request() req: any, @Body() body: { userId?: number; courseId?: number }) {
+  async sendReceipt(@Request() req: any, @Body() body: { userId?: number; courseId?: number; paymentIndex?: number }) {
     const targetUserId = body.userId || req.user.id;
-    return this.service.sendReceiptEmail(targetUserId, body.courseId);
+    return this.service.sendReceiptEmail(targetUserId, body.courseId, body.paymentIndex);
+  }
+
+  @Post('download-registration-letter')
+  async downloadRegistrationLetter(@Request() req: any, @Body() body: { userId?: number; courseId?: number }, @Res() res: Response) {
+    const targetUserId = body.userId || req.user.id;
+    const { filePath, fileName } = await this.service.generateRegistrationLetterPdf(targetUserId, body.courseId);
+    return res.download(filePath, fileName);
+  }
+
+  @Post('send-registration-letter')
+  async sendRegistrationLetter(@Request() req: any, @Body() body: { userId?: number; courseId?: number }) {
+    const targetUserId = body.userId || req.user.id;
+    return this.service.sendRegistrationLetterEmail(targetUserId, body.courseId);
   }
 
   @Get('user/:userId')
   async findByUserId(@Param('userId') userId: string) {
     const records = await this.service.findByUserId(parseInt(userId, 10));
-    // Format response payload to match legacy MongoDB properties, avoiding frontend crashes
-    const formatted = records.map((r) => ({
-      _id: r.id,
-      id: r.id,
-      totalFee: r.amountPaid,
-      discount: 0,
-      finalFee: r.amountPaid,
-      emiEnabled: false,
-      emiCount: 0,
-      paidAmount: r.amountPaid,
-      remainingAmount: 0,
-      payments: [
-        {
-          amount: r.amountPaid,
-          paymentDate: r.paymentDate,
-          paymentMethod: 'cash',
-          status: 'completed',
-          receiptNumber: `REC-${r.id}`,
-        },
-      ],
-      course: {
-        _id: 0,
-        id: 0,
-        title: 'Mock Course',
-      },
-    }));
-    return { success: true, data: formatted };
+    return { success: true, data: records };
   }
 
   // ─── General CRUD ──────────────────────────────────────────────────────────
@@ -72,6 +59,9 @@ export class FeeRecordsController {
     return this.service.create(data);
   }
 
+  // PaymentQuickModal.jsx saves an existing fee record with a PUT request; Patch is kept as
+  // an alias so any other PATCH-based caller keeps working too.
+  @Put(':id')
   @Patch(':id')
   async update(@Param('id') id: string, @Body() data: any) {
     return this.service.update(parseInt(id, 10), data);

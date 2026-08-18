@@ -15,6 +15,27 @@ export class CourseProgressController {
     return this.service.completeLecture(req.user.id, body.courseId, body.lectureId);
   }
 
+  @Post('lecture-watch')
+  async recordLectureWatch(
+    @Request() req: any,
+    @Body() body: { courseId: number; lectureId: string; deltaSeconds: number; durationSeconds?: number },
+  ) {
+    const data = await this.service.recordLectureWatch(
+      req.user.id,
+      body.courseId,
+      body.lectureId,
+      body.deltaSeconds,
+      body.durationSeconds,
+    );
+    return { success: true, data };
+  }
+
+  @Get('course/:courseId/lectures')
+  async lectureProgressForCourse(@Request() req: any, @Param('courseId') courseId: string) {
+    const data = await this.service.getLectureProgressForCourse(req.user.id, parseInt(courseId, 10));
+    return { success: true, data };
+  }
+
   @Get('continue-learning')
   async continueLearning(@Request() req: any) {
     const data = await this.service.getContinueLearning(req.user.id);
@@ -25,6 +46,18 @@ export class CourseProgressController {
   async courseSummary(@Request() req: any, @Param('courseId') courseId: string) {
     const data = await this.service.getCourseProgressSummary(req.user.id, parseInt(courseId, 10));
     return { success: true, data };
+  }
+
+  /**
+   * Self-serve fallback for students who crossed the 95% threshold before this auto-issue
+   * wiring existed (or via some path that doesn't call maybeAutoIssueCertificate) — lets the
+   * Certificate tab claim it on open instead of waiting for another completeLecture/submit call.
+   */
+  @Post('course/:courseId/claim-certificate')
+  async claimCertificate(@Request() req: any, @Param('courseId') courseId: string) {
+    const numCourseId = parseInt(courseId, 10);
+    const issued = await this.service.maybeAutoIssueCertificate(req.user.id, numCourseId);
+    return { success: true, issued };
   }
 
   @Get()

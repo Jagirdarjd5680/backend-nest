@@ -40,8 +40,6 @@ export class UploadsController {
   ) {
     const rawUserId = req.user?.id ?? req.user?._id ?? 'system';
     const userId = String(rawUserId);
-    console.log(`🚀 [UploadController] Incoming direct upload request from user: ${userId} (${typeof rawUserId})`);
-    console.log(`📁 [UploadController] File details:`, file ? { originalname: file.originalname, size: file.size, mimetype: file.mimetype } : 'No file received');
     return this.uploadsService.handleDirectUpload(file, body, userId);
   }
 
@@ -49,7 +47,6 @@ export class UploadsController {
   async importUrl(@Body() body: { title?: string; url?: string; type?: string }, @Request() req: any) {
     const rawUserId = req.user?.id ?? req.user?._id ?? 'system';
     const userId = String(rawUserId);
-    console.log(`🔗 [UploadController] Import-URL requested by user: ${userId} -> ${body?.url}`);
     return this.uploadsService.importUrl(body, userId);
   }
 
@@ -67,7 +64,6 @@ export class UploadsController {
   ) {
     const rawUserId = req.user?.id ?? req.user?._id ?? 'system';
     const userId = String(rawUserId);
-    console.log(`🧩 [UploadController] Incoming chunk upload [${dto?.chunkIndex}/${dto?.totalChunks}] for file: ${dto?.fileName}`);
     return this.uploadsService.handleChunkUpload(file, dto, userId);
   }
 
@@ -76,13 +72,11 @@ export class UploadsController {
     const rawUserId = req.user?.id ?? req.user?._id ?? 'system';
     const userId = String(rawUserId);
     const userRole = req.user?.role || 'admin';
-    console.log(`🔍 [UploadController] Fetching media library items for user: ${userId} (${userRole})`);
     return this.uploadsService.findAll(queryDto, { id: userId, role: userRole });
   }
 
   @Get('stats')
   async getStats() {
-    console.log(`📊 [UploadController] Fetching media library storage statistics`);
     return this.uploadsService.getStats();
   }
 
@@ -91,7 +85,6 @@ export class UploadsController {
     const rawUserId = req.user?.id ?? req.user?._id ?? 'system';
     const userId = String(rawUserId);
     const userRole = req.user?.role || 'admin';
-    console.log(`🗑️ [UploadController] Bulk delete requested for ${dto.fileNames?.length} files by user: ${userId}`);
     return this.uploadsService.bulkDelete(dto, { id: userId, role: userRole });
   }
 
@@ -100,7 +93,6 @@ export class UploadsController {
     const rawUserId = req.user?.id ?? req.user?._id ?? 'system';
     const userId = String(rawUserId);
     const userRole = req.user?.role || 'admin';
-    console.log(`🗑️ [UploadController] Delete requested for file: ${filename} by user: ${userId}`);
     return this.uploadsService.remove(filename, { id: userId, role: userRole });
   }
 }

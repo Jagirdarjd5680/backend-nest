@@ -24,17 +24,29 @@ export class BatchMaterialsService {
 
   /**
    * The student-facing course Materials tab has no direct enrollment->batch link to
-   * query (Enrollment only records courseId, not which batch) — same derivation
-   * ExamsService.findAllExams already uses for course access: a student's batch
-   * membership only really exists once they have Attendance rows against it.
+   * query (Enrollment only records courseId, not which batch) — derive it from
+   * BookingBatch (the actual batch-assignment table, same source timetables.service.ts
+   * findMine() uses) first, and still fold in Attendance so a student who's been
+   * attending a batch's classes sees its materials too even without a BookingBatch row.
+   * Attendance alone used to be the only signal here, which left materials invisible
+   * for any student who hadn't attended a class yet despite already being assigned.
    */
   async getMyMaterialsForCourse(studentId: number, courseId: number) {
-    const attendances = await this.prisma.attendance.findMany({
-      where: { studentId, batch: { courseId } },
-      select: { batchId: true },
-      distinct: ['batchId'],
-    });
-    const batchIds = attendances.map((a) => a.batchId);
+    const [bookings, attendances] = await Promise.all([
+      this.prisma.bookingBatch.findMany({
+        where: { userId: studentId, batch: { courseId } },
+        select: { batchId: true },
+      }),
+      this.prisma.attendance.findMany({
+        where: { studentId, batch: { courseId } },
+        select: { batchId: true },
+        distinct: ['batchId'],
+      }),
+    ]);
+    const batchIds = Array.from(new Set([
+      ...bookings.map((b) => b.batchId),
+      ...attendances.map((a) => a.batchId),
+    ]));
     if (batchIds.length === 0) {
       return { success: true, data: [] };
     }

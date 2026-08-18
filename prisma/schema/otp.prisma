@@ -3,12 +3,12 @@
 // dev server alone gets restarted constantly) and would never work correctly
 // across more than one backend instance in production.
 model OtpCode {
-  id        Int       @id @default(autoincrement())
-  target    String // "verify:<email>" or a raw phone number — matches OtpService's existing key scheme
-  code      String
-  expiresAt DateTime
+  id         Int       @id @default(autoincrement())
+  target     String // "verify:<email>" or a raw phone number — matches OtpService's existing key scheme
+  code       String
+  expiresAt  DateTime
   consumedAt DateTime?
-  createdAt DateTime  @default(now())
+  createdAt  DateTime  @default(now())
 
   @@index([target])
   @@map("otp_codes")

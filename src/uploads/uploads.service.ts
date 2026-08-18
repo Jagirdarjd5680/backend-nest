@@ -52,9 +52,7 @@ export class UploadsService {
    * Direct Single File Upload
    */
   async handleDirectUpload(file: any, body: { title?: string; courseId?: string } = {}, userId?: string) {
-    console.log(`📂 [UploadService] Received file for direct upload: ${file?.originalname} (${file?.size} bytes)`);
     if (!file) {
-      console.error(`❌ [UploadService] No file payload provided in request`);
       throw new BadRequestException('No file uploaded');
     }
 
@@ -68,7 +66,6 @@ export class UploadsService {
         fs.mkdirSync(this.uploadsDir, { recursive: true });
       }
       fs.writeFileSync(rawFilePath, file.buffer);
-      console.log(`✅ [UploadService] Raw file written to disk: ${rawFilePath}`);
     }
 
     if (mimetype.startsWith('video') || mimetype.startsWith('audio')) {
@@ -103,10 +100,7 @@ export class UploadsService {
             processingProgress: 100,
           },
         });
-        console.log(`🎬 [UploadService] Video ${videoId} HLS conversion ready at ${res.streamUrl}`);
-      }).catch(err => {
-        console.error(`❌ [UploadService] HLS video processing failed for ${videoId}:`, err);
-      });
+      }).catch(() => {});
     }
 
     const safeTitle = (body && body.title) ? body.title : (file.originalname || fileName);
@@ -129,8 +123,6 @@ export class UploadsService {
       },
     });
 
-    console.log(`🎉 [UploadService] Created media record in database ID: ${media.id}, URL: ${uploadedUrl}`);
-
     return {
       success: true,
       url: uploadedUrl,
@@ -149,7 +141,6 @@ export class UploadsService {
   async importUrl(body: { title?: string; url?: string; type?: string }, userId?: string) {
     const { url, type } = body || {};
     if (!url) {
-      console.error(`❌ [UploadService] import-url missing required field: url`);
       throw new BadRequestException('URL is required');
     }
 
@@ -188,8 +179,6 @@ export class UploadsService {
         processingProgress: 100,
       },
     });
-
-    console.log(`🔗 [UploadService] Imported external URL as media ID: ${media.id} (${resourceType}) -> ${url}`);
 
     return { success: true, data: { ...media, size: Number(media.size) } };
   }
@@ -286,10 +275,7 @@ export class UploadsService {
               processingProgress: 100,
             },
           });
-          console.log(`🎬 [UploadService] Chunked video ${videoId} HLS conversion ready at ${res.streamUrl}`);
-        }).catch(err => {
-          console.error(`❌ [UploadService] HLS chunked video processing failed for ${videoId}:`, err);
-        });
+        }).catch(() => {});
       }
 
       media = await this.prisma.media.update({
@@ -409,7 +395,10 @@ export class UploadsService {
       if (user.role !== 'admin' && file.uploadedById !== user.id) {
         continue;
       }
-      const filePath = path.join(this.uploadsDir, file.name);
+      // file.name is the display title (e.g. "photo.jpg"), not the on-disk filename —
+      // the actual saved file lives at the basename of file.url (e.g. "1699999999_photo.jpg").
+      const diskFileName = file.url ? path.basename(file.url) : file.name;
+      const filePath = path.join(this.uploadsDir, diskFileName);
       if (fs.existsSync(filePath)) {
         try {
           fs.unlinkSync(filePath);
@@ -445,9 +434,12 @@ export class UploadsService {
    * Single File Delete
    */
   async remove(filename: string, user: { id: string; role: string }) {
-    const media = await this.prisma.media.findFirst({
-      where: { name: filename },
-    });
+    // `filename` may be either the display title (media.name) or the on-disk name
+    // (basename of media.url) depending on the caller — accept both.
+    let media = await this.prisma.media.findFirst({ where: { name: filename } });
+    if (!media) {
+      media = await this.prisma.media.findFirst({ where: { url: { endsWith: `/${filename}` } } });
+    }
 
     if (!media) {
       throw new NotFoundException('File not found');
@@ -457,7 +449,8 @@ export class UploadsService {
       throw new ForbiddenException('You do not have permission to delete this file');
     }
 
-    const filePath = path.join(this.uploadsDir, filename);
+    const diskFileName = media.url ? path.basename(media.url) : filename;
+    const filePath = path.join(this.uploadsDir, diskFileName);
     if (fs.existsSync(filePath)) {
       try {
         fs.unlinkSync(filePath);

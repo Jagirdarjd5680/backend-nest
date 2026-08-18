@@ -1,9 +1,13 @@
 import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { CourseProgressService } from '../course-progress/course-progress.service';
 
 @Injectable()
 export class ExamsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private courseProgressService: CourseProgressService,
+  ) {}
 
   async findAllExams(userId?: number, role?: string, courseFilterId?: number) {
     let whereClause: any = { isPublished: true };
@@ -194,6 +198,12 @@ export class ExamsService {
     // The attempt is finished — drop its in-progress resume state so a later re-attempt
     // (if allowed) doesn't accidentally seed itself from this completed attempt's answers.
     await this.prisma.examProgress.deleteMany({ where: { examId: dto.examId, studentId } });
+
+    // Same reasoning as AssignmentsService.submitAssignment — an exam can be the last
+    // requirement standing between a student and 95% weighted progress.
+    if (exam.courseId) {
+      await this.courseProgressService.maybeAutoIssueCertificate(studentId, exam.courseId);
+    }
 
     return {
       success: true,

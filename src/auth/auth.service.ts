@@ -29,8 +29,14 @@ export class AuthService {
     private gamificationService: GamificationService,
   ) {}
 
-  async validateUser(email: string, pass: string): Promise<any> {
-    const user = await this.usersService.findByEmail(email);
+  /** `identifier` may be an email OR a phone number — whichever the student set up/registered
+   * with. Admins can now set a password for a student from the edit UI regardless of which
+   * identifier they have on file, so login needs to accept both, not just email. */
+  async validateUser(identifier: string, pass: string): Promise<any> {
+    const trimmed = (identifier || '').trim();
+    const user = trimmed.includes('@')
+      ? await this.usersService.findByEmail(trimmed)
+      : await this.usersService.findByPhone(trimmed);
     if (user && user.password) {
       const isMatch = await bcrypt.compare(pass, user.password);
       if (isMatch) {
@@ -325,8 +331,22 @@ export class AuthService {
   }
 
   private async _needsReferralPrompt(userId: number): Promise<boolean> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { referralPromptSkippedAt: true },
+    });
+    if (user?.referralPromptSkippedAt) return false;
     const existing = await this.prisma.referral.findFirst({ where: { referredId: userId } });
     return !existing;
+  }
+
+  /** Persists "Skip" on the post-login referral prompt so it isn't shown again on future logins. */
+  async skipReferralPrompt(userId: number) {
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { referralPromptSkippedAt: new Date() },
+    });
+    return { success: true };
   }
 
   /**

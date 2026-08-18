@@ -53,6 +53,20 @@ export class CoursesController {
   }
 
   @UseGuards(JwtAuthGuard)
+  @Get(':id/like')
+  async getLikeStatus(@Param('id') id: string, @Request() req: any) {
+    const data = await this.coursesService.getLikeStatus(parseInt(id, 10), Number(req.user.id || req.user._id));
+    return { success: true, data };
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/like')
+  async toggleLike(@Param('id') id: string, @Request() req: any) {
+    const data = await this.coursesService.toggleLike(parseInt(id, 10), Number(req.user.id || req.user._id));
+    return { success: true, data };
+  }
+
+  @UseGuards(JwtAuthGuard)
   @Get(':id/reviews')
   async getReviews(@Param('id') id: string, @Request() req: any) {
     const data = await this.reviewsService.findByCourse(parseInt(id, 10), Number(req.user.id || req.user._id));

@@ -109,7 +109,7 @@ model LiveClass {
   courseId Int
   course   Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
 
-  batchId  Int?
+  batchId Int?
 
   @@index([courseId])
   @@map("live_classes")

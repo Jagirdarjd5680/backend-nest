@@ -1,6 +1,8 @@
 import { Controller, Get, Post, Patch, Delete, Param, Body, UseGuards, Request } from '@nestjs/common';
 import { SupportSessionsService } from './support-sessions.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { RolesGuard } from '../auth/roles.guard';
+import { Roles } from '../auth/roles.decorator';
 
 @Controller('support-sessions')
 @UseGuards(JwtAuthGuard)
@@ -10,6 +12,21 @@ export class SupportSessionsController {
   @Get('my-history')
   async getMyHistory(@Request() req: any) {
     return this.service.getMyHistory(req.user.id);
+  }
+
+  // Must stay ahead of the generic ':id' route below.
+  @Get('pending-earnings')
+  @UseGuards(RolesGuard)
+  @Roles('admin')
+  async getPendingEarnings() {
+    return this.service.getPendingEarnings();
+  }
+
+  @Post(':id/approve-earning')
+  @UseGuards(RolesGuard)
+  @Roles('admin')
+  async approveEarning(@Param('id') id: string) {
+    return this.service.approveEarning(parseInt(id, 10));
   }
 
   @Post('request')

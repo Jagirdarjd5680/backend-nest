@@ -9,54 +9,58 @@ generator client {
 }
 
 model User {
-  id                 Int      @id @default(autoincrement())
-  name               String
-  email              String   @unique
-  password           String?
-  googleId           String?  @unique
-  role               String   @default("student")
-  phone              String?  @unique
-  address            String   @default("")
-  avatar             String   @default("")
-  twoFactorEnabled   Boolean  @default(false)
-  isActive           Boolean  @default(true)
-  isDeleted          Boolean  @default(false)
-  authMethod         String   @default("email")
-  source             String   @default("web")
-  rollNumber         String?  @unique
-  permissions        String   @default("fullControl")
+  id                      Int       @id @default(autoincrement())
+  name                    String
+  email                   String    @unique
+  password                String?
+  googleId                String?   @unique
+  role                    String    @default("student")
+  phone                   String?   @unique
+  address                 String    @default("")
+  avatar                  String    @default("")
+  twoFactorEnabled        Boolean   @default(false)
+  isActive                Boolean   @default(true)
+  isDeleted               Boolean   @default(false)
+  authMethod              String    @default("email")
+  source                  String    @default("web")
+  rollNumber              String?   @unique
+  permissions             String    @default("fullControl")
   // Per-module, per-action grant for teacher accounts only — shape:
   // { [moduleKey]: { view: bool, add: bool, edit: bool, delete: bool } }.
   // Admins always have full access regardless of this field (see ModulePermissionsGuard).
-  modulePermissions  Json?
-  referralCode       String?  @unique
-  walletBalance      Float    @default(0)
-  points             Int      @default(0)
-  isReferralApproved Boolean  @default(false)
-  upiId              String?  @default("")
-  studentProfile     Json?
-  parentId           Int?
-  isBlocked            Boolean   @default(false)
-  blockedAt            DateTime?
-  blockedReason        String?
+  modulePermissions       Json?
+  referralCode            String?   @unique
+  walletBalance           Float     @default(0)
+  points                  Int       @default(0)
+  isReferralApproved      Boolean   @default(false)
+  // Set when the user taps "Skip" on the post-login referral-code prompt, so they
+  // aren't asked again on every subsequent login — distinct from actually having
+  // a Referral row, which is what _needsReferralPrompt otherwise checks.
+  referralPromptSkippedAt DateTime?
+  upiId                   String?   @default("")
+  studentProfile          Json?
+  parentId                Int?
+  isBlocked               Boolean   @default(false)
+  blockedAt               DateTime?
+  blockedReason           String?
   // Chat-specific block (admin toggles from the chat header's three-dot menu) —
   // separate from `isBlocked`, which is the whole-account ban.
-  isBlockedFromChat     Boolean   @default(false)
-  forcedLogoutStrikes  Int       @default(0)
-  expoPushToken         String?
-  expoPushTokenPlatform String?
-  isEmailVerified       Boolean   @default(true)
-  passwordResetToken    String?
-  passwordResetExpiry   DateTime?
-  currentStreak         Int       @default(0)
-  longestStreak         Int       @default(0)
-  lastActiveDate        DateTime?
-  lastSeenAt            DateTime?
+  isBlockedFromChat       Boolean   @default(false)
+  forcedLogoutStrikes     Int       @default(0)
+  expoPushToken           String?
+  expoPushTokenPlatform   String?
+  isEmailVerified         Boolean   @default(true)
+  passwordResetToken      String?
+  passwordResetExpiry     DateTime?
+  currentStreak           Int       @default(0)
+  longestStreak           Int       @default(0)
+  lastActiveDate          DateTime?
+  lastSeenAt              DateTime?
   // 128-float face_recognition encoding from python_service's /get-descriptor — set once
   // via the face-attendance enrollment flow, then compared against on every check-in.
-  faceDescriptor        Json?
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  faceDescriptor          Json?
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
 
   // Parent-child self-relation
   parent   User?  @relation("ParentChildren", fields: [parentId], references: [id], onDelete: SetNull)

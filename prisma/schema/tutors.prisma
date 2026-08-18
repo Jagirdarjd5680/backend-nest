@@ -1,16 +1,25 @@
 model Tutor {
-  id           Int      @id @default(autoincrement())
-  charges      Float    @default(0)
-  earnings     Float    @default(0)
-  status       String   @default("offline")
-  tutorProfile Json?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id                     Int      @id @default(autoincrement())
+  charges                Float    @default(0)
+  /// Approved, withdrawable earnings only (in rupees) — incremented when an admin approves a
+  /// completed session's pending tokens (see SupportSession.earningApprovalStatus), never
+  /// written to directly on session completion.
+  earnings               Float    @default(0)
+  status                 String   @default("offline")
+  tutorProfile           Json?
+  /// How many student tokens one conversation costs — set by the admin when creating/editing
+  /// this tutor, snapshotted onto each SupportSession at request time so a later config change
+  /// doesn't retroactively alter past sessions' cost.
+  tokensPerSession       Int      @default(20)
+  sessionDurationMinutes Int      @default(10)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
 
   userId Int  @unique
   user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  withdrawals Withdrawal[]
+  withdrawals     Withdrawal[]
+  supportSessions SupportSession[]
 
   @@map("tutors")
 }
@@ -34,13 +43,26 @@ model Withdrawal {
 model SupportSession {
   id             Int      @id @default(autoincrement())
   title          String   @default("Support Session")
+  /// Session lifecycle: pending (requested) -> accepted -> completed, or rejected.
   status         String   @default("pending")
   studentId      Int?
   googleMeetLink String?  @db.Text
   scheduledAt    DateTime @default(now())
   createdAt      DateTime @default(now())
 
+  /// Snapshotted from Tutor.tokensPerSession/sessionDurationMinutes at request time — set once
+  /// the tutor accepts, so the student's token debit and the tutor's pending earnings both use
+  /// a fixed, historical value even if the tutor's per-session config changes later.
+  tokensCost            Int?
+  durationMinutes       Int?
+  completedAt           DateTime?
+  /// Separate from `status` — a session can be "completed" (lifecycle) while its tokens are
+  /// still "pending" (money): an admin must explicitly approve before the tutor's earnings
+  /// balance actually increases and becomes withdrawable.
+  earningApprovalStatus String    @default("pending")
+
   tutorId Int
+  tutor   Tutor @relation(fields: [tutorId], references: [id], onDelete: Cascade)
 
   @@map("support_sessions")
 }

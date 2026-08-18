@@ -53,8 +53,22 @@ model Course {
   payments     Payment[]
   certificates Certificate[]
   liveClasses  LiveClass[]
+  feeRecords   FeeRecord[]
 
   @@map("courses")
+}
+
+/// Real per-user like state — CourseHeroHeader previously kept "liked" as local component
+/// state seeded from Course.fakeLikes, so it reset on every navigation/remount instead of
+/// persisting. likeCount shown to users is fakeLikes + count(CourseLike) for this course.
+model CourseLike {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  courseId  Int
+  createdAt DateTime @default(now())
+
+  @@unique([userId, courseId])
+  @@map("course_likes")
 }
 
 model Lesson {
@@ -96,4 +110,21 @@ model CourseProgress {
 
   @@unique([studentId, courseId])
   @@map("course_progress")
+}
+
+/// Per-lecture actual watch time (seconds), separate from CourseProgress.completedLessons
+/// (a binary "did they tap complete" list). watchedSeconds only ever grows via small,
+/// continuous playback deltas the client reports — a seek/skip to the end never counts
+/// toward it, so the percent reflects real viewing, not furthest position reached.
+model LectureProgress {
+  id              Int      @id @default(autoincrement())
+  studentId       Int
+  courseId        Int
+  lectureId       String
+  watchedSeconds  Int      @default(0)
+  durationSeconds Int?
+  updatedAt       DateTime @updatedAt
+
+  @@unique([studentId, lectureId])
+  @@map("lecture_progress")
 }

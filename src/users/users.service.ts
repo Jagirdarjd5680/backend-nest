@@ -73,7 +73,7 @@ export class UsersService {
             course: true,
           },
         },
-        attendances: {
+        bookingBatches: {
           include: {
             batch: true,
           },
@@ -83,24 +83,53 @@ export class UsersService {
 
     if (!user) throw new NotFoundException(`User with ID ${id} not found`);
 
+    // Real per-course exam/assignment counts + how many this student has actually completed —
+    // CourseTab.jsx renders these as chips but they were never populated (always 0/0), so this
+    // is what makes "kitne exam diye / assignment kiye" show real numbers instead of fake ones.
+    const courseIds = user.enrollments.filter((e) => e.course).map((e) => e.courseId);
+    const [examsByCourseRaw, assignmentsByCourseRaw, examResultsByExam, submittedAssignmentIds, examTitlesById] = await Promise.all([
+      courseIds.length ? this.prisma.exam.findMany({ where: { courseId: { in: courseIds } }, select: { id: true, courseId: true } }) : [],
+      courseIds.length ? this.prisma.assignment.findMany({ where: { courseId: { in: courseIds } }, select: { id: true, courseId: true } }) : [],
+      this.prisma.examResult.findMany({ where: { studentId: id }, select: { examId: true }, distinct: ['examId'] }),
+      this.prisma.assignmentSubmission.findMany({ where: { studentId: id }, select: { assignmentId: true }, distinct: ['assignmentId'] }),
+      this.prisma.exam.findMany({ where: { id: { in: user.examResults.map((r) => r.examId) } }, select: { id: true, title: true } }),
+    ]);
+    const attemptedExamIds = new Set(examResultsByExam.map((r) => r.examId));
+    const examTitleMap = new Map(examTitlesById.map((e) => [e.id, e.title]));
+    const submittedAssignmentIdSet = new Set(submittedAssignmentIds.map((s) => s.assignmentId));
+
     const coursesWithDetails = user.enrollments
       .filter((e) => e.course)
-      .map((e) => ({
-        _id: e.courseId.toString(),
-        id: e.courseId,
-        title: e.course.title,
-        thumbnail: e.course.thumbnail,
-        price: e.course.price,
-        progress: 0,
-        paymentProgress: 100,
-        activationDate: e.createdAt,
-        expiryDate: null,
-        certificate: null,
-      }));
+      .map((e) => {
+        const courseExams = examsByCourseRaw.filter((ex) => ex.courseId === e.courseId);
+        const courseAssignments = assignmentsByCourseRaw.filter((a) => a.courseId === e.courseId);
+        return {
+          _id: e.courseId.toString(),
+          id: e.courseId,
+          title: e.course.title,
+          thumbnail: e.course.thumbnail,
+          price: e.course.price,
+          progress: 0,
+          paymentProgress: 100,
+          activationDate: e.createdAt,
+          expiryDate: null,
+          certificate: null,
+          examCount: courseExams.length,
+          examsAttempted: courseExams.filter((ex) => attemptedExamIds.has(ex.id)).length,
+          assignmentCount: courseAssignments.length,
+          assignmentsSubmitted: courseAssignments.filter((a) => submittedAssignmentIdSet.has(a.id)).length,
+        };
+      });
 
-    const userBatches = user.attendances
-      .filter((a) => a.batch)
-      .map((a) => a.batch.name);
+    // Batch assignment is BookingBatch (the real enrollment/assignment table — see
+    // timetables.service.ts/batch-materials.service.ts for the same pattern), not Attendance.
+    // The old code derived "assigned batch" from whether a PRESENT attendance row happened to
+    // exist, which is both why the edit form's batch field never autofilled for a student who
+    // hadn't attended a class yet, and why assigning a batch used to fabricate a fake PRESENT
+    // attendance record that polluted real attendance history.
+    const userBatches = user.bookingBatches
+      .filter((bb) => bb.batch)
+      .map((bb) => bb.batch.name);
 
     const enrolledCourseIds = user.enrollments.map((e) => e.courseId.toString());
 
@@ -117,11 +146,13 @@ export class UsersService {
         _id: r.id.toString(),
         id: r.id,
         score: r.score,
+        maxScore: r.maxScore,
+        passed: r.passed,
         createdAt: r.createdAt,
         exam: {
           _id: r.examId.toString(),
           id: r.examId,
-          title: 'Exam',
+          title: examTitleMap.get(r.examId) || 'Exam',
         },
       })),
       studentProfile: user.studentProfile || {},
@@ -357,22 +388,15 @@ export class UsersService {
       }
     });
 
-    // Link user attendance to batch
-    for (const batchId of targetBatchIds) {
-      const existing = await this.prisma.attendance.findFirst({
-        where: { studentId: userId, batchId },
+    // Full replace, same semantics as enrolledCourses above — BookingBatch is the real
+    // batch-assignment table (also what timetables/batch-materials read from), not a fabricated
+    // attendance record.
+    await this.prisma.bookingBatch.deleteMany({ where: { userId } });
+    if (targetBatchIds.length > 0) {
+      await this.prisma.bookingBatch.createMany({
+        data: targetBatchIds.map((batchId) => ({ userId, batchId })),
+        skipDuplicates: true,
       });
-
-      if (!existing) {
-        await this.prisma.attendance.create({
-          data: {
-            studentId: userId,
-            batchId,
-            status: 'PRESENT',
-            date: new Date(),
-          },
-        });
-      }
     }
   }
 
@@ -432,6 +456,33 @@ export class UsersService {
     };
   }
 
+  /** Media Library's "Face Registrations" tab — every user with a real enrolled face
+   * descriptor (attendance.service.ts's enrollFace), paired with the display thumbnail
+   * saved alongside it (studentProfile.biometricFace) so admins can spot-check whose face
+   * is on file without exposing the raw 128-float recognition vector. */
+  async getFaceRegistrations() {
+    // Prisma's Json? "not null" filtering is unreliable across how null vs JsonNull got
+    // stored historically, so filter in JS instead of trusting a `where` clause here.
+    const users = await this.prisma.user.findMany({
+      where: { isDeleted: false },
+      select: { id: true, name: true, email: true, avatar: true, rollNumber: true, studentProfile: true, updatedAt: true, faceDescriptor: true },
+      orderBy: { updatedAt: 'desc' },
+    });
+
+    return users
+      .filter((u) => u.faceDescriptor)
+      .map((u) => ({
+        _id: u.id.toString(),
+        id: u.id,
+        name: u.name,
+        email: u.email,
+        avatar: u.avatar,
+        rollNumber: u.rollNumber,
+        biometricFace: (u.studentProfile as any)?.biometricFace || null,
+        registeredAt: u.updatedAt,
+      }));
+  }
+
   async getBinCount(): Promise<number> {
     return this.prisma.user.count({
       where: { isDeleted: true },
@@ -486,16 +537,106 @@ export class UsersService {
     });
   }
 
+  async findLatestEnrollmentCourseId(userId: number): Promise<number | null> {
+    const latest = await this.prisma.enrollment.findFirst({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+      select: { courseId: true },
+    });
+    return latest?.courseId ?? null;
+  }
+
+  /** Admin-only "set/change password" — separate from the self-service reset-token flow in
+   * AuthService, which requires the student to already have email access. */
+  async setPassword(userId: number, newPassword: string): Promise<{ success: boolean; message: string }> {
+    if (!newPassword || newPassword.length < 6) {
+      throw new BadRequestException('Password must be at least 6 characters.');
+    }
+    const user = await this.findById(userId);
+    if (!user) throw new NotFoundException(`User with ID ${userId} not found`);
+
+    const salt = await bcrypt.genSalt(10);
+    const hashed = await bcrypt.hash(newPassword, salt);
+    await this.prisma.user.update({ where: { id: userId }, data: { password: hashed } });
+    return { success: true, message: `Password updated for ${user.name}` };
+  }
+
+  /** Every assignment visible to this student (via enrolled courses / assigned batches), each
+   * paired with their submission if one exists — SubmissionsTab.jsx needs the full set (not just
+   * submitted ones) so it can show "MISSING" for assignments never turned in. Was a stub
+   * returning [] before, so this tab always read empty regardless of real activity. */
+  async getSubmissionsForUser(userId: number) {
+    const [enrollments, bookingBatches] = await Promise.all([
+      this.prisma.enrollment.findMany({ where: { userId }, select: { courseId: true } }),
+      this.prisma.bookingBatch.findMany({ where: { userId }, select: { batchId: true } }),
+    ]);
+    const courseIds = enrollments.map((e) => e.courseId);
+    const batchIds = bookingBatches.map((b) => b.batchId);
+    if (courseIds.length === 0 && batchIds.length === 0) return { success: true, data: [] };
+
+    const assignments = await this.prisma.assignment.findMany({
+      where: {
+        OR: [
+          courseIds.length ? { courseId: { in: courseIds } } : undefined,
+          batchIds.length ? { batchId: { in: batchIds } } : undefined,
+        ].filter(Boolean) as any,
+      },
+      include: { submissions: { where: { studentId: userId } } },
+    });
+
+    const [courses, batches] = await Promise.all([
+      this.prisma.course.findMany({ where: { id: { in: assignments.map((a) => a.courseId).filter((x): x is number => x != null) } }, select: { id: true, title: true } }),
+      this.prisma.batch.findMany({ where: { id: { in: assignments.map((a) => a.batchId).filter((x): x is number => x != null) } }, select: { id: true, name: true } }),
+    ]);
+    const courseTitleMap = new Map(courses.map((c) => [c.id, c.title]));
+    const batchNameMap = new Map(batches.map((b) => [b.id, b.name]));
+
+    const data = assignments.map((a) => {
+      const sub = a.submissions[0];
+      return {
+        assignmentId: a.id,
+        title: a.title,
+        course: a.courseId ? courseTitleMap.get(a.courseId) || 'General' : 'General',
+        batch: a.batchId ? batchNameMap.get(a.batchId) || 'General' : 'General',
+        submitted: !!sub,
+        submissionDetails: sub
+          ? {
+              _id: sub.id.toString(),
+              submittedAt: sub.submittedAt,
+              fileUrl: sub.fileUrl,
+              textAnswer: sub.textAnswer,
+              status: sub.status,
+              grade: sub.grade,
+              feedback: sub.feedback,
+            }
+          : null,
+      };
+    });
+
+    return { success: true, data };
+  }
+
+  /**
+   * Preview-only: stores a single thumbnail image so the admin UI's "Currently Registered"
+   * circle has something to show. FaceCapture.jsx reads `studentProfile.biometricFace` for
+   * that thumbnail; this used to write the payload under the key `faceDescriptor` instead
+   * (and never unwrapped the `imagesBase64` array the frontend actually sends), so the key
+   * name never matched what was being read back and the preview stayed permanently blank
+   * even after a successful enrollment. Real recognition data lives in the User.faceDescriptor
+   * column, written by AttendanceService.enrollFace — this is display-only.
+   */
   async updateBiometricFace(userId: number, body: any): Promise<User> {
     const user = await this.findById(userId);
     if (!user) {
       throw new NotFoundException(`User with ID ${userId} not found`);
     }
 
+    const thumbnail = body?.imagesBase64?.[0] || body?.biometricFace || body?.faceImageUrl || null;
+
     const existingProfile = (user.studentProfile as Record<string, any>) || {};
     const updatedProfile = {
       ...existingProfile,
-      faceDescriptor: body?.faceDescriptor || body?.descriptor || body,
+      biometricFace: thumbnail,
     };
 
     return this.prisma.user.update({

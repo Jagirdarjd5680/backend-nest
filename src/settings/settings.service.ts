@@ -1,5 +1,9 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import * as PDFDocument from 'pdfkit';
 import { PrismaService } from '../prisma/prisma.service';
+import { drawInvoice, InvoiceCompany } from '../common/pdf/invoiceTemplate';
+import { drawRegistrationLetter } from '../common/pdf/registrationLetterTemplate';
+import { drawCertificate } from '../common/pdf/certificateTemplate';
 
 // Default settings structure matching old MongoDB settings
 const DEFAULT_SETTINGS = {
@@ -49,7 +53,12 @@ const DEFAULT_SETTINGS = {
   storage: {
     activeProvider: 'local',
   },
-  tutorSupport: {},
+  tutorSupport: {
+    // Conversion rate for the tutor-conversation token economy — 1 token = this many rupees,
+    // used both to display a tutor's pending/approved earnings in rupees and to compute the
+    // payout amount when an admin approves a completed session.
+    tokenValueInRupees: 10,
+  },
 };
 
 @Injectable()
@@ -190,31 +199,98 @@ export class SettingsService {
   }
 
   // ─── Step 7: AI & Storage Connectivity Testers ──────────────────────────
-  async testAiConnectivity(provider: string, apiKey?: string) {
-    const key = apiKey || process.env[`${provider.toUpperCase()}_API_KEY`];
+  // AISettings.jsx's `providers` list uses 'claude' as the id (matching the rest of the
+  // page's UI state), but every SDK/env-var below is keyed on the Anthropic name.
+  private normalizeAiProvider(provider: string): string {
+    return provider === 'claude' ? 'anthropic' : provider;
+  }
+
+  // Provider APIs deprecate model names over time (e.g. gemini-1.5-flash 404ing as of this
+  // writing) faster than this file gets updated — these are just the initial dropdown values/
+  // fallbacks; AISettings.jsx's per-provider model picker is the real source of truth, and
+  // whatever the admin selects there is what actually gets used below.
+  private defaultAiModel(normalizedProvider: string): string {
+    if (normalizedProvider === 'openai') return 'gpt-3.5-turbo';
+    if (normalizedProvider === 'gemini') return 'gemini-2.0-flash';
+    if (normalizedProvider === 'anthropic') return 'claude-3-5-haiku-20241022';
+    return '';
+  }
+
+  async testAiConnectivity(provider: string, apiKey?: string, model?: string) {
+    const normalized = this.normalizeAiProvider(provider);
+    const key = apiKey || process.env[`${normalized.toUpperCase()}_API_KEY`];
     if (!key) {
       return { success: false, provider, message: `API Key for ${provider} is not configured.` };
     }
+    const useModel = model || this.defaultAiModel(normalized);
 
     try {
-      if (provider === 'openai') {
+      if (normalized === 'openai') {
         const OpenAI = require('openai');
         const openai = new OpenAI({ apiKey: key });
         await openai.models.list();
-      } else if (provider === 'gemini') {
-        const { GoogleGenerativeAI } = require('@google/generative-ai');
-        const genAI = new GoogleGenerativeAI(key);
-        const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
-        await model.generateContent('ping');
-      } else if (provider === 'anthropic') {
+      } else if (normalized === 'gemini') {
+        // @google/generative-ai is deprecated by Google in favor of @google/genai — the old
+        // SDK's endpoints were being sunset, which is why every Gemini model started 404ing
+        // regardless of which one was picked, not just the specific model named in the error.
+        const { GoogleGenAI } = require('@google/genai');
+        const ai = new GoogleGenAI({ apiKey: key });
+        await ai.models.list();
+      } else if (normalized === 'anthropic') {
         const Anthropic = require('@anthropic-ai/sdk');
         const anthropic = new Anthropic({ apiKey: key });
         await anthropic.models.list();
+      } else {
+        return { success: false, provider, message: `Unknown provider: ${provider}` };
       }
-      return { success: true, provider, message: `${provider.toUpperCase()} connection successful` };
+      return { success: true, provider, message: `${provider.toUpperCase()} (${useModel || 'default'}) connection successful` };
     } catch (err) {
       return { success: false, provider, message: `Connection failed: ${err.message}` };
     }
+  }
+
+  /** Sandbox "send a test message" behind AISettings.jsx's chat panel — one-shot, no history. */
+  async chatWithAi(provider: string, apiKey: string | undefined, message: string, model?: string) {
+    const normalized = this.normalizeAiProvider(provider);
+    const key = apiKey || process.env[`${normalized.toUpperCase()}_API_KEY`];
+    if (!key) {
+      throw new Error(`API Key for ${provider} is not configured.`);
+    }
+    if (!message?.trim()) {
+      throw new Error('Message is required.');
+    }
+    const useModel = model || this.defaultAiModel(normalized);
+
+    if (normalized === 'openai') {
+      const OpenAI = require('openai');
+      const openai = new OpenAI({ apiKey: key });
+      const completion = await openai.chat.completions.create({
+        model: useModel,
+        messages: [{ role: 'user', content: message }],
+      });
+      return { content: completion.choices[0]?.message?.content || '' };
+    }
+
+    if (normalized === 'gemini') {
+      const { GoogleGenAI } = require('@google/genai');
+      const ai = new GoogleGenAI({ apiKey: key });
+      const result = await ai.models.generateContent({ model: useModel, contents: message });
+      return { content: result.text || '' };
+    }
+
+    if (normalized === 'anthropic') {
+      const Anthropic = require('@anthropic-ai/sdk');
+      const anthropic = new Anthropic({ apiKey: key });
+      const result = await anthropic.messages.create({
+        model: useModel,
+        max_tokens: 1024,
+        messages: [{ role: 'user', content: message }],
+      });
+      const textBlock = result.content.find((b: any) => b.type === 'text');
+      return { content: textBlock?.text || '' };
+    }
+
+    throw new Error(`Unknown provider: ${provider}`);
   }
 
   async testStorageConnection(provider: string = 'local') {
@@ -224,5 +300,73 @@ export class SettingsService {
       status: 'online',
       message: `Storage provider '${provider}' is accessible.`,
     };
+  }
+
+  /**
+   * Backs the PDF Formats settings page's live preview + "Download Demo PDF" — renders the
+   * exact same template real receipts/registration letters use, but with fabricated sample
+   * data, so admins see precisely what students will get instead of a static screenshot.
+   */
+  async generatePdfDemo(type: 'receipt' | 'registration' | 'certificate'): Promise<Buffer> {
+    const all = await this._buildSettingsObject();
+    const company: InvoiceCompany = {
+      name: all?.general?.siteName || 'God of Graphics',
+      gstNumber: all?.company?.gstNumber || '08JGDPK1363L1Z2',
+      address: all?.company?.address || 'Pal Rd, near Barkhatullah Khan Stadium, opp. ACP Office, Masuria Colony, Masuriya, Baldev Nagar, Jodhpur, Rajasthan 342003',
+      phone: all?.company?.contact || '8905561612',
+      email: all?.company?.email ? String(all.company.email).split('\n')[0] : 'godofgraphic24@gmail.com',
+      logo: all?.general?.pdfLogo || all?.general?.siteLogo || '',
+      primaryColor: all?.theme?.primaryColor || '#f39c12',
+    };
+
+    return new Promise((resolve, reject) => {
+      const doc =
+        type === 'certificate'
+          ? new PDFDocument({ layout: 'landscape', size: 'A4', margin: 0 })
+          : new PDFDocument({ margin: 40, size: 'A4', bufferPages: true });
+      const buffers: Buffer[] = [];
+      doc.on('data', (chunk) => buffers.push(chunk));
+      doc.on('end', () => resolve(Buffer.concat(buffers)));
+      doc.on('error', reject);
+
+      let render: Promise<void>;
+      if (type === 'certificate') {
+        render = drawCertificate(doc, {
+          companyName: company.name,
+          companyTagline: all?.company?.tagline || 'Premier Academy for Multimedia & Computer Education',
+          logo: company.logo,
+          studentName: 'Student Name',
+          courseName: 'Advance Graphic Designing',
+          softwareCovered: 'Photoshop, Illustrator, Corel Draw',
+          issueDate: new Date(),
+          certificateId: 'GOG108#000103',
+          signatureName: all?.company?.signatoryName || 'Founder & CEO',
+          signatureImage: all?.general?.pdfCertificateSignature || undefined,
+        });
+      } else if (type === 'registration') {
+        render = drawRegistrationLetter(doc, {
+          company,
+          refNo: 'REG-000114',
+          date: new Date(),
+          student: { name: 'Chandi Waale', email: 'chandi.waale@example.com', address: 'B Rd, Gandhi Maidan, Sardarpura, Jodhpur, Rajasthan 342003', rollNumber: 'GOG-2026-114' },
+          courseName: 'Website Development',
+          batchName: 'Morning Batch',
+          totalFee: 33000,
+          discount: 0,
+          finalFee: 33000,
+        });
+      } else {
+        render = drawInvoice(doc, {
+          company,
+          billTo: { name: 'Chandi Waale', address: 'B Rd, Gandhi Maidan, Sardarpura, Jodhpur, Rajasthan 342003', contact: '+91 78786 80973' },
+          invoiceNo: 'INV-29726-114',
+          date: new Date(),
+          itemName: 'Website Development',
+          totalAmount: 33000,
+        });
+      }
+
+      render.then(() => doc.end()).catch(reject);
+    });
   }
 }

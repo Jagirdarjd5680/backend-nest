@@ -1,11 +1,15 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { CourseProgressService } from '../course-progress/course-progress.service';
 
 @Injectable()
 export class AssignmentsService {
   private readonly logger = new Logger(AssignmentsService.name);
 
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private courseProgressService: CourseProgressService,
+  ) {}
 
   // Assignment CRUD
   async findAllAssignments(courseId?: number) {
@@ -20,11 +24,24 @@ export class AssignmentsService {
   }
 
   async findOneAssignment(id: number) {
-    const item = await this.prisma.assignment.findUnique({ where: { id } });
+    const item = await this.prisma.assignment.findUnique({
+      where: { id },
+      include: {
+        submissions: {
+          include: { student: { select: { id: true, name: true, email: true, rollNumber: true } } },
+          orderBy: { submittedAt: 'desc' },
+        },
+      },
+    });
     if (!item) throw new NotFoundException(`Assignment with ID ${id} not found`);
+    const { submissions, ...assignment } = item;
     return {
       success: true,
-      data: { ...item, _id: item.id.toString() },
+      data: {
+        ...assignment,
+        _id: assignment.id.toString(),
+        submissions: submissions.map((s) => ({ ...s, _id: s.id.toString() })),
+      },
     };
   }
 
@@ -155,8 +172,9 @@ export class AssignmentsService {
   }
 
   async submitAssignment(assignmentId: number, studentId: number, data: any) {
+    console.log(`🐛 [AssignmentUpload] assignmentId=${assignmentId} studentId=${studentId} fileUrl=${data?.fileUrl} textAnswer=${data?.textAnswer ? '(present)' : '(empty)'}`);
     try {
-      await this.findOneAssignment(assignmentId);
+      const assignment = await this.findOneAssignment(assignmentId);
 
       const submission = await this.prisma.assignmentSubmission.create({
         data: {
@@ -168,6 +186,15 @@ export class AssignmentsService {
           status: 'pending',
         },
       });
+
+      console.log(`🐛 [AssignmentUpload] saved submissionId=${submission.id} savedFileUrl=${submission.fileUrl}`);
+
+      // This submission may be the last thing standing between the student and 95%
+      // weighted course progress — completeLecture() already auto-issues in that case,
+      // but a submission crossing the threshold otherwise never triggered it.
+      if (assignment.data.courseId) {
+        await this.courseProgressService.maybeAutoIssueCertificate(studentId, assignment.data.courseId);
+      }
 
       return {
         success: true,

@@ -178,22 +178,7 @@ export class CourseProgressService {
 
     const breakdown = await this.getBreakdown(studentId, courseId);
     const progressPercent = calculateProgressPercent(breakdown);
-
-    // Auto-issue certificate if 95%+ and not issued yet
-    let certificateIssued = false;
-    if (progressPercent >= 95) {
-      const existingCert = await this.prisma.certificate.findFirst({
-        where: { userId: studentId, courseId },
-      });
-      if (!existingCert) {
-        try {
-          await this.certificatesService.issueCertificate({ studentId, courseId, force: true });
-          certificateIssued = true;
-        } catch (err) {
-          console.error('[CourseProgressService] Auto certificate issue error:', err.message);
-        }
-      }
-    }
+    const certificateIssued = await this.maybeAutoIssueCertificate(studentId, courseId, progressPercent);
 
     return {
       success: true,
@@ -207,5 +192,67 @@ export class CourseProgressService {
         progressPercent,
       },
     };
+  }
+
+  /**
+   * Records actual watched seconds for one lecture, additively — the client only ever reports
+   * small continuous-playback deltas (never the raw currentTime a seek could jump to), so
+   * skipping to the end of a video can't inflate this. watchedSeconds is capped at the
+   * lecture's duration so replays past 100% don't push it over.
+   */
+  async recordLectureWatch(studentId: number, courseId: number, lectureId: string, deltaSeconds: number, durationSeconds?: number) {
+    const existing = await this.prisma.lectureProgress.findUnique({
+      where: { studentId_lectureId: { studentId, lectureId } },
+    });
+
+    const effectiveDuration = durationSeconds ?? existing?.durationSeconds ?? undefined;
+    const rawWatched = (existing?.watchedSeconds ?? 0) + Math.max(0, Math.round(deltaSeconds));
+    const watchedSeconds = effectiveDuration ? Math.min(rawWatched, effectiveDuration) : rawWatched;
+
+    const record = await this.prisma.lectureProgress.upsert({
+      where: { studentId_lectureId: { studentId, lectureId } },
+      create: { studentId, courseId, lectureId, watchedSeconds, durationSeconds: effectiveDuration },
+      update: { watchedSeconds, durationSeconds: effectiveDuration },
+    });
+
+    return {
+      watchedSeconds: record.watchedSeconds,
+      durationSeconds: record.durationSeconds,
+      percent: record.durationSeconds ? Math.min(100, Math.round((record.watchedSeconds / record.durationSeconds) * 100)) : 0,
+    };
+  }
+
+  /** All of a student's per-lecture watch progress for one course, for the curriculum tab's badges. */
+  async getLectureProgressForCourse(studentId: number, courseId: number) {
+    const rows = await this.prisma.lectureProgress.findMany({ where: { studentId, courseId } });
+    return rows.map((r) => ({
+      lectureId: r.lectureId,
+      watchedSeconds: r.watchedSeconds,
+      durationSeconds: r.durationSeconds,
+      percent: r.durationSeconds ? Math.min(100, Math.round((r.watchedSeconds / r.durationSeconds) * 100)) : 0,
+    }));
+  }
+
+  /**
+   * Shared by every action that can push a student's weighted progress (lessons + exams +
+   * assignments) past the auto-issue threshold — completing a lecture, submitting an
+   * assignment, or finishing an exam. Previously this only ran from completeLecture(), so a
+   * student whose last remaining requirement was an assignment or exam (very common — video
+   * watching usually finishes first) never got their certificate auto-issued at all.
+   */
+  async maybeAutoIssueCertificate(studentId: number, courseId: number, progressPercent?: number): Promise<boolean> {
+    const pct = progressPercent ?? calculateProgressPercent(await this.getBreakdown(studentId, courseId));
+    if (pct < 95) return false;
+
+    const existingCert = await this.prisma.certificate.findFirst({ where: { userId: studentId, courseId } });
+    if (existingCert) return false;
+
+    try {
+      await this.certificatesService.issueCertificate({ studentId, courseId, force: true });
+      return true;
+    } catch (err) {
+      console.error('[CourseProgressService] Auto certificate issue error:', err.message);
+      return false;
+    }
   }
 }

@@ -67,6 +67,27 @@ export class CoursesService {
     return course;
   }
 
+  /** Displayed like count = the admin-seeded fakeLikes baseline + real per-user likes. */
+  async getLikeStatus(courseId: number, userId: number) {
+    const [course, realLikes, myLike] = await Promise.all([
+      this.prisma.course.findUnique({ where: { id: courseId }, select: { fakeLikes: true } }),
+      this.prisma.courseLike.count({ where: { courseId } }),
+      this.prisma.courseLike.findUnique({ where: { userId_courseId: { userId, courseId } } }),
+    ]);
+    if (!course) throw new NotFoundException(`Course with ID ${courseId} not found`);
+    return { liked: !!myLike, likeCount: course.fakeLikes + realLikes };
+  }
+
+  async toggleLike(courseId: number, userId: number) {
+    const existing = await this.prisma.courseLike.findUnique({ where: { userId_courseId: { userId, courseId } } });
+    if (existing) {
+      await this.prisma.courseLike.delete({ where: { id: existing.id } });
+    } else {
+      await this.prisma.courseLike.create({ data: { userId, courseId } });
+    }
+    return this.getLikeStatus(courseId, userId);
+  }
+
   /**
    * Admin/teacher "view course" — a superset of findOne(id, null) (no platform gate, since
    * that restriction only makes sense for the student-facing browse/purchase/view flow) that

@@ -71,6 +71,27 @@ export class TimetablesService {
     }));
   }
 
+  async findMineForCourse(userId: number, courseId: number) {
+    const myBatch = await this.prisma.bookingBatch.findFirst({
+      where: { userId, batch: { courseId } },
+      select: { batchId: true },
+    });
+    if (!myBatch) return [];
+
+    const rows = await this.prisma.timetable.findMany({
+      where: { batchId: myBatch.batchId },
+      include: {
+        batch: true,
+      },
+    });
+    return rows.map((r) => ({
+      ...r,
+      subject: r.topic,
+      teacher: r.teacherId ? String(r.teacherId) : null,
+      course: r.courseId ? String(r.courseId) : null,
+    }));
+  }
+
   async findOne(id: number) {
     const item = await this.prisma.timetable.findUnique({
       where: { id },
