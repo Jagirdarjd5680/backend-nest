@@ -1,4 +1,5 @@
 import { Controller, Get, Post, Patch, Delete, Param, Body, UseGuards, Request, Headers } from '@nestjs/common';
+import { assertOwnsRow, assertSelfOrStaff } from '../common/access';
 import { PaymentsService } from './payments.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
@@ -37,38 +38,49 @@ export class PaymentsController {
   }
 
   @Get()
+  @UseGuards(RolesGuard)
+  @Roles('admin')
   async findAll() {
     return this.service.findAll();
   }
 
   @Get('user/:userId')
-  async findByUser(@Param('userId') userId: string) {
+  async findByUser(@Param('userId') userId: string, @Request() req: any) {
+    assertSelfOrStaff(req.user, parseInt(userId, 10));
     const data = await this.service.findByUser(parseInt(userId, 10));
     return { success: true, data };
   }
 
   @Get('stats')
+  @UseGuards(RolesGuard)
+  @Roles('admin')
   async getStats() {
     const data = await this.service.getStats();
     return { success: true, data };
   }
 
   @Get(':id')
-  async findOne(@Param('id') id: string) {
-    return this.service.findOne(parseInt(id, 10));
+  async findOne(@Param('id') id: string, @Request() req: any) {
+    return assertOwnsRow(req.user, await this.service.findOne(parseInt(id, 10)), (p: any) => p.userId);
   }
 
   @Post()
+  @UseGuards(RolesGuard)
+  @Roles('admin')
   async create(@Body() data: CreatePaymentDto) {
     return this.service.create(data);
   }
 
   @Patch(':id')
+  @UseGuards(RolesGuard)
+  @Roles('admin')
   async update(@Param('id') id: string, @Body() data: UpdatePaymentDto) {
     return this.service.update(parseInt(id, 10), data);
   }
 
   @Delete(':id')
+  @UseGuards(RolesGuard)
+  @Roles('admin')
   async remove(@Param('id') id: string) {
     return this.service.remove(parseInt(id, 10));
   }

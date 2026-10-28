@@ -1,6 +1,30 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
+/**
+ * Rupee discount a coupon gives on `amount`. Shared by /coupons/validate and
+ * payments create-order so the price shown before checkout is what gets charged.
+ * `discountType: 'percentage'` uses `discountValue` as a percent (capped by
+ * `maxDiscountAmount`); flat coupons fall back to the legacy `discount` column.
+ */
+export function computeCouponDiscount(
+  coupon: { discountType?: string | null; discountValue?: number | null; discount: number; maxDiscountAmount?: number | null },
+  amount: number,
+): number {
+  let discount: number;
+  if (coupon.discountType === 'percentage') {
+    const percent = coupon.discountValue || coupon.discount || 0;
+    discount = (amount * percent) / 100;
+    if (coupon.maxDiscountAmount && coupon.maxDiscountAmount > 0) {
+      discount = Math.min(discount, coupon.maxDiscountAmount);
+    }
+  } else {
+    discount = coupon.discountValue || coupon.discount || 0;
+  }
+  discount = Math.max(0, Math.min(discount, amount));
+  return Math.round(discount * 100) / 100;
+}
+
 @Injectable()
 export class CouponsService {
   constructor(private prisma: PrismaService) {}
@@ -60,8 +84,8 @@ export class CouponsService {
       throw new BadRequestException('Coupon has expired');
     }
 
-    const discountAmount = Math.min(coupon.discount, purchaseAmount);
-    const finalAmount = Math.max(0, purchaseAmount - discountAmount);
+    const discountAmount = computeCouponDiscount(coupon, purchaseAmount);
+    const finalAmount = Math.round(Math.max(0, purchaseAmount - discountAmount) * 100) / 100;
 
     return {
       success: true,

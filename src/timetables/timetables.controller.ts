@@ -1,3 +1,5 @@
+import { Roles } from '../auth/roles.decorator';
+import { RolesGuard } from '../auth/roles.guard';
 import { Controller, Get, Post, Patch, Delete, Param, Body, Query, UseGuards, Request } from '@nestjs/common';
 import { TimetablesService } from './timetables.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -8,6 +10,8 @@ export class TimetablesController {
   constructor(private service: TimetablesService) {}
 
   @Get()
+  @UseGuards(RolesGuard)
+  @Roles('admin', 'teacher')
   async findAll(@Query('batch') batch?: string) {
     const data = await this.service.findAll(batch ? parseInt(batch, 10) : undefined);
     return { success: true, data };
@@ -26,6 +30,8 @@ export class TimetablesController {
   }
 
   @Post('bulk')
+  @UseGuards(RolesGuard)
+  @Roles('admin', 'teacher')
   async bulkReplace(@Body() body: { batch: string | number; timetable: any[] }) {
     const data = await this.service.bulkReplace(parseInt(String(body.batch), 10), body.timetable || []);
     return { success: true, data };
@@ -37,16 +43,22 @@ export class TimetablesController {
   }
 
   @Post()
+  @UseGuards(RolesGuard)
+  @Roles('admin', 'teacher')
   async create(@Body() data: any) {
     return this.service.create(data);
   }
 
   @Patch(':id')
+  @UseGuards(RolesGuard)
+  @Roles('admin', 'teacher')
   async update(@Param('id') id: string, @Body() data: any) {
     return this.service.update(parseInt(id, 10), data);
   }
 
   @Delete(':id')
+  @UseGuards(RolesGuard)
+  @Roles('admin', 'teacher')
   async remove(@Param('id') id: string) {
     return this.service.remove(parseInt(id, 10));
   }

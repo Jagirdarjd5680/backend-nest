@@ -23,11 +23,15 @@ export class SeatBookingsController {
   }
 
   @Get()
+  @UseGuards(RolesGuard)
+  @Roles('admin', 'teacher')
   async findAll() {
     return this.service.findAll();
   }
 
   @Get(':id')
+  @UseGuards(RolesGuard)
+  @Roles('admin', 'teacher')
   async findOne(@Param('id') id: string) {
     return this.service.findOne(parseInt(id, 10));
   }
@@ -55,11 +59,15 @@ export class SeatBookingsController {
   }
 
   @Patch(':id')
+  @UseGuards(RolesGuard)
+  @Roles('admin', 'teacher')
   async update(@Param('id') id: string, @Body() data: any) {
     return this.service.update(parseInt(id, 10), data);
   }
 
   @Delete(':id')
+  @UseGuards(RolesGuard)
+  @Roles('admin', 'teacher')
   async remove(@Param('id') id: string) {
     return this.service.remove(parseInt(id, 10));
   }

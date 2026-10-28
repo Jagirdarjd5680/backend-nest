@@ -2,9 +2,16 @@ import { Injectable, NotFoundException, BadRequestException, Logger } from '@nes
 import { PrismaService } from '../prisma/prisma.service';
 import { User } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
+import * as fs from 'fs';
+import * as path from 'path';
 import { UsersRecycleBinGateway } from './users-recycle-bin.gateway';
 import { ExpoPushService } from '../notifications/expo-push.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { normalizePhone, phoneLookupVariants } from '../common/phone.util';
+
+const UPLOADS_DIR = path.join(process.cwd(), 'uploads');
+const AVATAR_MAX_BYTES = 1 * 1024 * 1024;
+const AVATAR_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/jpg']);
 
 const allowedUserFields = [
   'name',
@@ -60,7 +67,7 @@ export class UsersService {
   }
 
   async findByPhone(phone: string): Promise<User | null> {
-    return this.prisma.user.findFirst({ where: { phone } });
+    return this.prisma.user.findFirst({ where: { phone: { in: phoneLookupVariants(phone) } } });
   }
 
   async findByIdDetails(id: number) {
@@ -164,7 +171,7 @@ export class UsersService {
     try {
       const { enrolledCourses, batches, autoGeneratePassword, ...rest } = userData;
 
-      // Sanitize empty string unique fields so MySQL does not trigger unique constraint errors on empty strings
+      // Sanitize empty string unique fields so the database does not trigger unique constraint errors on empty strings
       for (const field of ['phone', 'googleId', 'rollNumber', 'referralCode']) {
         if (rest[field] === '' || rest[field] === null || rest[field] === undefined) {
           delete rest[field];
@@ -181,8 +188,9 @@ export class UsersService {
       }
 
       if (rest.phone) {
-        const existingPhone = await this.prisma.user.findUnique({
-          where: { phone: rest.phone },
+        rest.phone = normalizePhone(rest.phone);
+        const existingPhone = await this.prisma.user.findFirst({
+          where: { phone: { in: phoneLookupVariants(rest.phone) } },
         });
         if (existingPhone) {
           this.logger.warn(`[CREATE USER FAILED] Phone already exists: ${rest.phone}`);
@@ -269,8 +277,9 @@ export class UsersService {
       }
 
       if (rest.phone) {
-        const existingPhone = await this.prisma.user.findUnique({
-          where: { phone: rest.phone },
+        rest.phone = normalizePhone(rest.phone);
+        const existingPhone = await this.prisma.user.findFirst({
+          where: { phone: { in: phoneLookupVariants(rest.phone) } },
         });
         if (existingPhone && existingPhone.id !== id) {
           this.logger.warn(`[UPDATE USER FAILED] Phone already in use by user ${existingPhone.id}: ${rest.phone}`);
@@ -423,9 +432,9 @@ export class UsersService {
 
     if (search) {
       where.OR = [
-        { name: { contains: search } },
-        { email: { contains: search } },
-        { phone: { contains: search } },
+        { name: { contains: search, mode: 'insensitive' } },
+        { email: { contains: search, mode: 'insensitive' } },
+        { phone: { contains: search, mode: 'insensitive' } },
       ];
     }
 
@@ -535,6 +544,51 @@ export class UsersService {
         studentProfile: updatedProfile,
       },
     });
+  }
+
+  /** Self-service name edit — deliberately its own narrow method (not the admin PUT /users/:id
+   * path, and not folded into updateStudentProfile's JSON blob) so a student can only ever touch
+   * their own `name` column, nothing else. */
+  async updateOwnName(userId: number, name: string): Promise<User> {
+    const trimmed = (name || '').trim();
+    if (!trimmed) throw new BadRequestException('Name cannot be empty.');
+    if (trimmed.length > 100) throw new BadRequestException('Name is too long.');
+    return this.prisma.user.update({ where: { id: userId }, data: { name: trimmed } });
+  }
+
+  /** Deletes the old avatar's physical file (only ever an internal `/uploads/...` path this
+   * server wrote — Google-login avatars are external URLs and must never be touched here) once
+   * the new one is safely saved, so replaced avatars don't pile up as orphaned files forever. */
+  private deleteOldAvatarFile(oldAvatar: string | null | undefined) {
+    if (!oldAvatar || !oldAvatar.startsWith('/uploads/')) return;
+    try {
+      const filePath = path.join(UPLOADS_DIR, oldAvatar.replace(/^\/uploads\//, '').split('?')[0]);
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    } catch {
+      // Best-effort cleanup — a failed unlink shouldn't block the avatar change itself.
+    }
+  }
+
+  async updateAvatar(userId: number, file: { buffer: Buffer; mimetype: string; size: number; originalname: string }): Promise<User> {
+    if (!file) throw new BadRequestException('No image uploaded.');
+    if (!AVATAR_MIME_TYPES.has(file.mimetype)) {
+      throw new BadRequestException('Only PNG or JPEG images are allowed.');
+    }
+    if (file.size > AVATAR_MAX_BYTES) {
+      throw new BadRequestException('Image must be 1MB or smaller.');
+    }
+
+    const user = await this.findById(userId);
+    if (!user) throw new NotFoundException(`User with ID ${userId} not found`);
+
+    const ext = file.mimetype === 'image/png' ? 'png' : 'jpg';
+    const fileName = `avatar_${userId}_${Date.now()}.${ext}`;
+    if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+    fs.writeFileSync(path.join(UPLOADS_DIR, fileName), file.buffer);
+
+    const updated = await this.prisma.user.update({ where: { id: userId }, data: { avatar: `/uploads/${fileName}` } });
+    this.deleteOldAvatarFile(user.avatar);
+    return updated;
   }
 
   async findLatestEnrollmentCourseId(userId: number): Promise<number | null> {

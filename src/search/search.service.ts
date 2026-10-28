@@ -17,8 +17,8 @@ export class SearchService {
       const users = await this.prisma.user.findMany({
         where: {
           OR: [
-            { name: { contains: q } },
-            { email: { contains: q } },
+            { name: { contains: q, mode: 'insensitive' } },
+            { email: { contains: q, mode: 'insensitive' } },
           ],
         },
         take: 5,
@@ -41,8 +41,8 @@ export class SearchService {
       const courses = await this.prisma.course.findMany({
         where: {
           OR: [
-            { title: { contains: q } },
-            { description: { contains: q } },
+            { title: { contains: q, mode: 'insensitive' } },
+            { description: { contains: q, mode: 'insensitive' } },
           ],
         },
         take: 5,
@@ -65,8 +65,8 @@ export class SearchService {
       const exams = await this.prisma.exam.findMany({
         where: {
           OR: [
-            { title: { contains: q } },
-            { description: { contains: q } },
+            { title: { contains: q, mode: 'insensitive' } },
+            { description: { contains: q, mode: 'insensitive' } },
           ],
         },
         take: 5,
@@ -89,8 +89,8 @@ export class SearchService {
       const blogs = await this.prisma.blog.findMany({
         where: {
           OR: [
-            { title: { contains: q } },
-            { content: { contains: q } },
+            { title: { contains: q, mode: 'insensitive' } },
+            { content: { contains: q, mode: 'insensitive' } },
           ],
         },
         take: 5,

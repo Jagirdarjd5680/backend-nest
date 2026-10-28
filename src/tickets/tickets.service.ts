@@ -5,8 +5,10 @@ import { PrismaService } from '../prisma/prisma.service';
 export class TicketsService {
   constructor(private prisma: PrismaService) {}
 
-  async findAll() {
+  /** Every row, or only one user's when `userId` is given. */
+  async findAll(userId?: number) {
     return this.prisma.ticket.findMany({
+      where: userId != null ? { userId } : undefined,
       include: {
           user: true
       }

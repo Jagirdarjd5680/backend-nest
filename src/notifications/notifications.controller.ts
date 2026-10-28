@@ -1,9 +1,12 @@
+import { Roles } from '../auth/roles.decorator';
+import { RolesGuard } from '../auth/roles.guard';
 import { Controller, Get, Post, Patch, Delete, Param, Body, UseGuards, Request } from '@nestjs/common';
 import { NotificationsService } from './notifications.service';
 import { FcmService } from './fcm.service';
 import { ExpoPushService } from './expo-push.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { isStaff } from '../common/access';
 
 @Controller('notifications')
 @UseGuards(JwtAuthGuard)
@@ -25,6 +28,8 @@ export class NotificationsController {
   }
 
   @Post('send')
+  @UseGuards(RolesGuard)
+  @Roles('admin', 'teacher')
   async sendPushNotification(@Body() body: { token?: string; topic?: string; title: string; message: string; data?: Record<string, string> }) {
     if (body.topic) {
       return this.fcmService.sendToTopic(body.topic, body.title, body.message, body.data);
@@ -41,17 +46,23 @@ export class NotificationsController {
   }
 
   @Get('history')
+  @UseGuards(RolesGuard)
+  @Roles('admin', 'teacher')
   async findHistory() {
     const data = await this.service.findHistory();
     return { success: true, data };
   }
 
   @Get(':id')
+  @UseGuards(RolesGuard)
+  @Roles('admin', 'teacher')
   async findOne(@Param('id') id: string) {
     return this.service.findOne(parseInt(id, 10));
   }
 
   @Post()
+  @UseGuards(RolesGuard)
+  @Roles('admin', 'teacher')
   async create(@Body() body: any) {
     // Only pass through fields the Notification model actually has — callers (e.g. the
     // timetable-sync flow) sometimes include extra context fields like `batch` that would
@@ -82,11 +93,15 @@ export class NotificationsController {
   }
 
   @Patch(':id')
-  async update(@Param('id') id: string, @Body() data: any) {
-    return this.service.update(parseInt(id, 10), data);
+  async update(@Param('id') id: string, @Body() data: any, @Request() req: any) {
+    // Students only mark notifications read; editing the content is staff work.
+    const patch = isStaff(req.user) ? data : { isRead: !!data?.isRead };
+    return this.service.update(parseInt(id, 10), patch);
   }
 
   @Delete(':id')
+  @UseGuards(RolesGuard)
+  @Roles('admin', 'teacher')
   async remove(@Param('id') id: string) {
     return this.service.remove(parseInt(id, 10));
   }

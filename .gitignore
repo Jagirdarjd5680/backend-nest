@@ -17,6 +17,8 @@ lerna-debug.log*
 
 # Uploads & temporary logs
 /uploads
+# Per-video HLS AES keys — secret, never commit
+/storage
 
 # IDE
 .idea/

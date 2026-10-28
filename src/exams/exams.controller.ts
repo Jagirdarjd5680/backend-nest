@@ -76,6 +76,8 @@ export class ExamsController {
   }
 
   @Post('submit')
+  @UseGuards(RolesGuard)
+  @Roles('admin', 'teacher')
   async submitResult(@Body() data: SubmitExamResultDto) {
     return this.service.submitResult(data);
   }

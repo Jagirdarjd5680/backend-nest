@@ -1,5 +1,0 @@
--- AlterTable
-ALTER TABLE `users` ADD COLUMN `currentStreak` INTEGER NOT NULL DEFAULT 0,
-    ADD COLUMN `lastActiveDate` DATETIME(3) NULL,
-    ADD COLUMN `longestStreak` INTEGER NOT NULL DEFAULT 0;
-

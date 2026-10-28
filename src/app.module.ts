@@ -58,6 +58,7 @@ import { SearchModule } from './search/search.module';
 import { BackupModule } from './backup/backup.module';
 import { GamificationModule } from './gamification/gamification.module';
 import { UploadsModule } from './uploads/uploads.module';
+import { R2Module } from './r2/r2.module'; // [r2]
 import { QueuesModule } from './queues/queues.module';
 import { GoogleReviewsModule } from './google-reviews/google-reviews.module';
 import { VideoReviewsModule } from './video-reviews/video-reviews.module';
@@ -123,6 +124,7 @@ import { VideoReviewsModule } from './video-reviews/video-reviews.module';
     BackupModule,
     GamificationModule,
     UploadsModule,
+    R2Module, // [r2]
     GoogleReviewsModule,
     VideoReviewsModule,
   ],

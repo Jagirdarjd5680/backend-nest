@@ -1,4 +1,7 @@
+import { Roles } from '../auth/roles.decorator';
+import { RolesGuard } from '../auth/roles.guard';
 import { Controller, Get, Post, Patch, Delete, Param, Body, Request, UseGuards, Logger } from '@nestjs/common';
+import { assertSelfOrStaff } from '../common/access';
 import { AttendanceService } from './attendance.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
@@ -10,11 +13,15 @@ export class AttendanceController {
   constructor(private service: AttendanceService) {}
 
   @Get()
+  @UseGuards(RolesGuard)
+  @Roles('admin', 'teacher')
   async findAll() {
     return this.service.findAll();
   }
 
   @Get('batch/:batchId')
+  @UseGuards(RolesGuard)
+  @Roles('admin', 'teacher')
   async findByBatch(@Param('batchId') batchId: string) {
     const numId = parseInt(batchId, 10);
     if (isNaN(numId)) return { success: false, message: 'Invalid Batch ID' };
@@ -22,13 +29,16 @@ export class AttendanceController {
   }
 
   @Get('user/:userId')
-  async findByUser(@Param('userId') userId: string) {
+  async findByUser(@Param('userId') userId: string, @Request() req: any) {
     const numId = parseInt(userId, 10);
     if (isNaN(numId)) return { success: false, message: 'Invalid User ID' };
+    assertSelfOrStaff(req.user, numId);
     return this.service.findByUser(numId);
   }
 
   @Get(':id')
+  @UseGuards(RolesGuard)
+  @Roles('admin', 'teacher')
   async findOne(@Param('id') id: string) {
     const numId = parseInt(id, 10);
     if (isNaN(numId)) return { success: false, message: 'Invalid ID' };
@@ -57,11 +67,15 @@ export class AttendanceController {
   }
 
   @Post()
+  @UseGuards(RolesGuard)
+  @Roles('admin', 'teacher')
   async create(@Body() data: any) {
     return this.service.create(data);
   }
 
   @Patch(':id')
+  @UseGuards(RolesGuard)
+  @Roles('admin', 'teacher')
   async update(@Param('id') id: string, @Body() data: any) {
     const numId = parseInt(id, 10);
     if (isNaN(numId)) return { success: false, message: 'Invalid ID' };
@@ -69,6 +83,8 @@ export class AttendanceController {
   }
 
   @Delete(':id')
+  @UseGuards(RolesGuard)
+  @Roles('admin', 'teacher')
   async remove(@Param('id') id: string) {
     const numId = parseInt(id, 10);
     if (isNaN(numId)) return { success: false, message: 'Invalid ID' };

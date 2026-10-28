@@ -1,3 +1,4 @@
+import { computeCouponDiscount } from '../coupons/coupons.service';
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import * as crypto from 'crypto';
@@ -57,12 +58,12 @@ export class PaymentsService {
         where: { code: dto.couponCode.toUpperCase() },
       });
       if (coupon && new Date(coupon.expiry) > new Date()) {
-        discount = coupon.discount;
+        discount = computeCouponDiscount(coupon, course.price);
         appliedCoupon = coupon.code;
       }
     }
 
-    const finalAmount = Math.max(0, course.price - discount);
+    const finalAmount = Math.round(Math.max(0, course.price - discount) * 100) / 100;
     const amountInPaise = Math.round(finalAmount * 100);
 
     const credentials = await this.getRazorpayCredentials();

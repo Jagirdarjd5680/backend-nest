@@ -167,6 +167,106 @@ export class TutorsService {
     });
   }
 
+  private async findByUserId(userId: number) {
+    const t = await this.prisma.tutor.findUnique({ where: { userId } });
+    if (!t) throw new NotFoundException('Tutor profile not found for this account');
+    return t;
+  }
+
+  // `SupportSession.studentId` is a bare FK with no Prisma relation, so student rows are
+  // batch-fetched and stitched on manually — mirrors SupportSessionsService.attachStudents.
+  private async attachStudents<T extends { studentId: number | null }>(sessions: T[]) {
+    const studentIds = [...new Set(sessions.map((s) => s.studentId).filter((id): id is number => id != null))];
+    const students = studentIds.length
+      ? await this.prisma.user.findMany({
+          where: { id: { in: studentIds } },
+          select: { id: true, name: true, email: true, phone: true, rollNumber: true, avatar: true },
+        })
+      : [];
+    const studentMap = new Map(
+      students.map((s) => [s.id, { ...s, _id: s.id.toString(), profileImage: s.avatar }]),
+    );
+    return sessions.map((s) => ({
+      ...s,
+      _id: (s as any).id.toString(),
+      student: s.studentId != null ? studentMap.get(s.studentId) ?? null : null,
+    }));
+  }
+
+  async updateMyStatus(userId: number, status: string) {
+    const t = await this.findByUserId(userId);
+    const updated = await this.prisma.tutor.update({ where: { id: t.id }, data: { status } });
+    return { success: true, data: { ...updated, _id: updated.id.toString() } };
+  }
+
+  async getMyStats(userId: number) {
+    const t = await this.prisma.tutor.findUnique({ where: { userId }, include: { user: true } });
+    if (!t) throw new NotFoundException('Tutor profile not found for this account');
+
+    const sessions = await this.prisma.supportSession.findMany({ where: { tutorId: t.id } });
+    const profile = (t.tutorProfile as any) || {};
+
+    return {
+      success: true,
+      stats: {
+        pending: sessions.filter((s) => s.status === 'pending').length,
+        accepted: sessions.filter((s) => ['accepted', 'active', 'completed'].includes(s.status)).length,
+        rejected: sessions.filter((s) => s.status === 'rejected').length,
+        totalSessions: sessions.length,
+        // No tutor-review/rating model exists yet — reporting an honest empty state
+        // instead of fabricating numbers.
+        rating: null,
+        recentReviews: [],
+      },
+      tutor: {
+        ...t,
+        _id: t.id.toString(),
+        name: t.user?.name,
+        email: t.user?.email,
+        phone: t.user?.phone,
+        minWithdrawal: profile.minWithdrawal || 5,
+        charges: { perConversation: t.charges || profile.perConversation || 0 },
+      },
+    };
+  }
+
+  async getMyRequests(userId: number) {
+    const t = await this.findByUserId(userId);
+    const sessions = await this.prisma.supportSession.findMany({
+      where: { tutorId: t.id },
+      orderBy: { createdAt: 'desc' },
+    });
+    const enriched = await this.attachStudents(sessions);
+    // SupportRequests.jsx groups/labels by `category` — sessions don't carry one separately
+    // from `title`, so alias it rather than adding a column for what's cosmetic grouping.
+    return { success: true, data: enriched.map((s) => ({ ...s, category: (s as any).title })) };
+  }
+
+  /** Images students have sent this tutor in chat — "Student Results & Uploads" on the dashboard. */
+  async getMyMedia(userId: number) {
+    await this.findByUserId(userId);
+    const messages = await this.prisma.chatMessage.findMany({
+      where: { receiverId: userId, image: { not: null } },
+      include: { sender: true },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+    });
+
+    return {
+      success: true,
+      data: messages
+        .filter((m) => m.sender?.role === 'student')
+        .map((m) => ({
+          _id: m.id.toString(),
+          image: m.image,
+          createdAt: m.createdAt,
+          sender: m.sender
+            ? { ...m.sender, _id: m.sender.id.toString(), profileImage: m.sender.avatar }
+            : null,
+        })),
+    };
+  }
+
   async findDetailed(id: number) {
     const t = await this.prisma.tutor.findUnique({
       where: { id },

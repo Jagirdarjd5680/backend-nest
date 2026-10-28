@@ -1,5 +1,5 @@
 datasource db {
-  provider = "mysql"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -43,6 +43,10 @@ model User {
   isBlocked               Boolean   @default(false)
   blockedAt               DateTime?
   blockedReason           String?
+  // Temporary 60s cooldown (multi-device strikes, OTP-send spam) — distinct from `isBlocked`,
+  // which is the permanent admin-only lock. A client re-hitting the endpoint during the
+  // cooldown must see this exact same timestamp back, not a freshly-extended one.
+  blockedUntil            DateTime?
   // Chat-specific block (admin toggles from the chat header's three-dot menu) —
   // separate from `isBlocked`, which is the whole-account ban.
   isBlockedFromChat       Boolean   @default(false)

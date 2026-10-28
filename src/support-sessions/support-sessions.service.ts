@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { isStaff } from '../common/access';
 import { PrismaService } from '../prisma/prisma.service';
 import { SettingsService } from '../settings/settings.service';
 
@@ -16,16 +17,68 @@ export class SupportSessionsService {
     return Math.max(0, credits - debits);
   }
 
+  // `studentId` is a bare FK with no Prisma relation (a session can outlive a deleted student),
+  // so it can't be `include`d — batch-fetch the User rows and stitch them on manually instead.
+  private async attachStudents<T extends { studentId: number | null }>(sessions: T[]) {
+    const studentIds = [...new Set(sessions.map((s) => s.studentId).filter((id): id is number => id != null))];
+    const students = studentIds.length
+      ? await this.prisma.user.findMany({
+          where: { id: { in: studentIds } },
+          select: { id: true, name: true, email: true, phone: true, rollNumber: true, avatar: true },
+        })
+      : [];
+    const studentMap = new Map(
+      students.map((s) => [s.id, { ...s, _id: s.id.toString(), profileImage: s.avatar }]),
+    );
+    return sessions.map((s) => ({
+      ...s,
+      _id: (s as any).id.toString(),
+      student: s.studentId != null ? studentMap.get(s.studentId) ?? null : null,
+    }));
+  }
+
+  private shapeTutor(tutor: any) {
+    if (!tutor) return tutor;
+    return { ...tutor, _id: tutor.id.toString() };
+  }
+
   async findAll() {
     return this.prisma.supportSession.findMany({
       orderBy: { createdAt: 'desc' },
     });
   }
 
+  /** Every session across every tutor, for the admin "Tutor Chats" monitoring view. */
+  async findAllForAdmin() {
+    const sessions = await this.prisma.supportSession.findMany({
+      include: { tutor: { include: { user: true } } },
+      orderBy: { createdAt: 'desc' },
+    });
+    const withStudents = await this.attachStudents(sessions);
+    return {
+      success: true,
+      // No dedicated `category` column exists on the model — `title` is the closest
+      // analogue and is what the admin table's Category chip actually wants to show.
+      data: withStudents.map((s) => ({ ...s, category: (s as any).title, tutor: this.shapeTutor((s as any).tutor) })),
+    };
+  }
+
+  /** 404 unless `user` is staff, the session's student, or its tutor. */
+  async assertParticipant(id: number, user: any) {
+    if (isStaff(user)) return;
+    const s = await this.prisma.supportSession.findUnique({ where: { id }, select: { studentId: true, tutor: { select: { userId: true } } } });
+    const uid = Number(user?.id);
+    if (!s || (s.studentId !== uid && s.tutor?.userId !== uid)) throw new NotFoundException('Not found');
+  }
+
   async findOne(id: number) {
-    const item = await this.prisma.supportSession.findUnique({ where: { id } });
+    const item = await this.prisma.supportSession.findUnique({
+      where: { id },
+      include: { tutor: { include: { user: true } } },
+    });
     if (!item) throw new NotFoundException(`SupportSession with ID ${id} not found`);
-    return item;
+    const [enriched] = await this.attachStudents([item]);
+    return { ...enriched, tutor: this.shapeTutor((item as any).tutor) };
   }
 
   async create(data: any) {

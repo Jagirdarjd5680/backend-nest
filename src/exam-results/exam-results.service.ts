@@ -67,6 +67,7 @@ export class ExamResultsService {
 
     return {
       _id: result.id.toString(),
+      studentId: result.studentId, // ownership check in the controller
       score: result.score,
       maxScore: result.maxScore,
       passed: result.passed,

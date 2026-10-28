@@ -1,7 +1,7 @@
 model Banner {
   id          Int      @id @default(autoincrement())
   name        String   @default("")
-  imageUrl    String
+  imageUrl    String   @db.Text
   linkType    String   @default("none")
   linkId      Int?
   externalUrl String?  @default("")

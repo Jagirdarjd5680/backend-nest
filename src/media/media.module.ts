@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 import { MediaController } from './media.controller';
 import { MediaService } from './media.service';
+import { HlsSecurityService } from './hls-security.service';
 import { PrismaModule } from '../prisma/prisma.module';
 
 @Module({
@@ -12,7 +13,7 @@ import { PrismaModule } from '../prisma/prisma.module';
     }),
   ],
   controllers: [MediaController],
-  providers: [MediaService],
-  exports: [MediaService],
+  providers: [MediaService, HlsSecurityService],
+  exports: [MediaService, HlsSecurityService],
 })
 export class MediaModule {}

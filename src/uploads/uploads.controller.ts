@@ -1,3 +1,5 @@
+import { Roles } from '../auth/roles.decorator';
+import { RolesGuard } from '../auth/roles.guard';
 import {
   Controller,
   Get,
@@ -76,6 +78,8 @@ export class UploadsController {
   }
 
   @Get('stats')
+  @UseGuards(RolesGuard)
+  @Roles('admin', 'teacher')
   async getStats() {
     return this.uploadsService.getStats();
   }

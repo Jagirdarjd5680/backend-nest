@@ -137,34 +137,39 @@ export class ReferralsController {
     return this.service.processReferralRecord(parseInt(id, 10), body.status);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Get()
+  @Roles('admin')
   async findAll() {
     return this.service.findAll();
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Get(':id')
+  @Roles('admin')
   async findOne(@Param('id') id: string) {
     const numId = parseInt(id, 10);
     if (isNaN(numId)) return { success: false, message: 'Invalid ID' };
     return this.service.findOne(numId);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Post()
+  @Roles('admin')
   async create(@Body() data: any) {
     return this.service.create(data);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Patch(':id')
+  @Roles('admin')
   async update(@Param('id') id: string, @Body() data: any) {
     return this.service.update(parseInt(id, 10), data);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Delete(':id')
+  @Roles('admin')
   async remove(@Param('id') id: string) {
     return this.service.remove(parseInt(id, 10));
   }

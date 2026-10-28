@@ -22,6 +22,16 @@ export class SupportSessionsController {
     return this.service.getPendingEarnings();
   }
 
+  // Also must stay ahead of ':id' — used by the admin "Tutor Chats" monitoring page
+  // (frontend/src/pages/Tutors/SupportChatCenter.jsx), which previously 404'd here
+  // because this route didn't exist at all.
+  @Get('admin/all')
+  @UseGuards(RolesGuard)
+  @Roles('admin')
+  async findAllForAdmin() {
+    return this.service.findAllForAdmin();
+  }
+
   @Post(':id/approve-earning')
   @UseGuards(RolesGuard)
   @Roles('admin')
@@ -41,31 +51,42 @@ export class SupportSessionsController {
   async updateStatus(
     @Param('id') id: string,
     @Body() body: { status: string; meetUrl?: string },
+    @Request() req: any,
   ) {
+    await this.service.assertParticipant(parseInt(id, 10), req.user);
     return this.service.updateSessionStatus(parseInt(id, 10), body.status, body.meetUrl);
   }
 
   @Get()
+  @UseGuards(RolesGuard)
+  @Roles('admin', 'teacher')
   async findAll() {
     return this.service.findAll();
   }
 
   @Get(':id')
-  async findOne(@Param('id') id: string) {
-    return this.service.findOne(parseInt(id, 10));
+  async findOne(@Param('id') id: string, @Request() req: any) {
+    await this.service.assertParticipant(parseInt(id, 10), req.user);
+    const data = await this.service.findOne(parseInt(id, 10));
+    return { success: true, data };
   }
 
   @Post()
+  @UseGuards(RolesGuard)
+  @Roles('admin', 'teacher')
   async create(@Body() data: any) {
     return this.service.create(data);
   }
 
   @Patch(':id')
-  async update(@Param('id') id: string, @Body() data: any) {
+  async update(@Param('id') id: string, @Body() data: any, @Request() req: any) {
+    await this.service.assertParticipant(parseInt(id, 10), req.user);
     return this.service.update(parseInt(id, 10), data);
   }
 
   @Delete(':id')
+  @UseGuards(RolesGuard)
+  @Roles('admin', 'teacher')
   async remove(@Param('id') id: string) {
     return this.service.remove(parseInt(id, 10));
   }

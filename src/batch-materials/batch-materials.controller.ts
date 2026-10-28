@@ -1,3 +1,5 @@
+import { Roles } from '../auth/roles.decorator';
+import { RolesGuard } from '../auth/roles.guard';
 import {
   Controller,
   Get,
@@ -29,6 +31,8 @@ export class BatchMaterialsController {
   constructor(private service: BatchMaterialsService) {}
 
   @Get()
+  @UseGuards(RolesGuard)
+  @Roles('admin', 'teacher')
   async findAll() {
     return this.service.findAll();
   }
@@ -93,24 +97,32 @@ export class BatchMaterialsController {
   }
 
   @Post('from-media')
+  @UseGuards(RolesGuard)
+  @Roles('admin', 'teacher')
   async addFromMedia(@Body() body: any) {
     this.logger.log(`[ADD FROM MEDIA] Payload: ${JSON.stringify(body)}`);
     return this.service.addFromMedia(body);
   }
 
   @Post('bulk-delete')
+  @UseGuards(RolesGuard)
+  @Roles('admin', 'teacher')
   async bulkDelete(@Body() body: { ids: any[] }) {
     this.logger.log(`[BULK DELETE BATCH MATERIALS] IDs: ${JSON.stringify(body.ids)}`);
     return this.service.bulkDelete(body.ids || []);
   }
 
   @Post()
+  @UseGuards(RolesGuard)
+  @Roles('admin', 'teacher')
   async create(@Body() data: any) {
     this.logger.log(`[CREATE BATCH MATERIAL] Payload: ${JSON.stringify(data)}`);
     return this.service.create(data);
   }
 
   @Put(':id')
+  @UseGuards(RolesGuard)
+  @Roles('admin', 'teacher')
   async updatePut(@Param('id') id: string, @Body() data: any) {
     const numId = parseInt(id, 10);
     if (isNaN(numId)) return { success: false, message: 'Invalid ID' };
@@ -118,6 +130,8 @@ export class BatchMaterialsController {
   }
 
   @Patch(':id')
+  @UseGuards(RolesGuard)
+  @Roles('admin', 'teacher')
   async updatePatch(@Param('id') id: string, @Body() data: any) {
     const numId = parseInt(id, 10);
     if (isNaN(numId)) return { success: false, message: 'Invalid ID' };
@@ -125,6 +139,8 @@ export class BatchMaterialsController {
   }
 
   @Delete(':id')
+  @UseGuards(RolesGuard)
+  @Roles('admin', 'teacher')
   async remove(@Param('id') id: string) {
     const numId = parseInt(id, 10);
     if (isNaN(numId)) return { success: false, message: 'Invalid ID' };

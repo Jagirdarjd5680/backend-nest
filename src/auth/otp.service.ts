@@ -1,9 +1,38 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { TemporaryBlockException } from '../common/exceptions/temporary-block.exception';
+
+const SEND_LIMIT = 3; // this many sends allowed inside the window; the next one is blocked
+const SEND_WINDOW_MS = 60_000;
 
 @Injectable()
 export class OtpService {
   constructor(private readonly prisma: PrismaService) {}
+
+  /**
+   * Repeated OTP-send taps for the same phone number burn a real SMS credit each time in
+   * production mode, and even in test mode it's a sign of someone hammering the button. Blocks
+   * for a fixed 60s from the *first* of the recent sends — not "now + 60s" recomputed on every
+   * retry — so a client that keeps tapping/refreshing during the cooldown sees the same expiry
+   * count down instead of it perpetually resetting.
+   */
+  async checkSendCooldown(phone: string): Promise<void> {
+    const windowStart = new Date(Date.now() - SEND_WINDOW_MS);
+    const recent = await this.prisma.otpCode.findMany({
+      where: { target: phone, createdAt: { gte: windowStart } },
+      orderBy: { createdAt: 'asc' },
+      take: SEND_LIMIT + 1,
+    });
+    if (recent.length < SEND_LIMIT) return;
+
+    const blockedUntil = new Date(recent[0].createdAt.getTime() + SEND_WINDOW_MS);
+    if (blockedUntil.getTime() > Date.now()) {
+      throw new TemporaryBlockException(
+        'Too many OTP requests for this number. Please wait 60 seconds and try again.',
+        blockedUntil,
+      );
+    }
+  }
 
   /**
    * Persisted in the DB, not an in-memory Map — a Map loses every pending code on
@@ -66,26 +95,30 @@ export class OtpService {
     }
   }
 
-  async sendSmsOtp(phone: string, otp: string): Promise<void> {
-    const accountSid = process.env.TWILIO_ACCOUNT_SID;
-    const authToken = process.env.TWILIO_AUTH_TOKEN;
-    const from = process.env.TWILIO_FROM_NUMBER;
-
-    if (!accountSid || !authToken || !from) {
-      console.log(`[OtpService] SMS credentials not configured. OTP for ${phone}: ${otp}`);
+  /**
+   * `mode` comes from Settings > Auth's Test/Production toggle (auth.otpMode). Test mode never
+   * calls the real SMS gateway — the OTP only ever reaches the server console, so QA/dev logins
+   * can't burn a real SMS credit or accidentally text a real phone. Production mode sends via
+   * 2Factor.in using Settings > Integrations' smsApiKey; with no key configured it still just
+   * falls back to console-only rather than failing the login flow.
+   */
+  async sendSmsOtp(phone: string, otp: string, mode: 'test' | 'production' = 'test', smsApiKey?: string): Promise<void> {
+    if (mode !== 'production' || !smsApiKey) {
+      console.log(
+        `[OtpService] ${mode === 'production' ? 'SMS API key not configured, ' : 'Test mode, '}OTP for ${phone}: ${otp}`,
+      );
       return;
     }
 
     try {
-      const twilio = require('twilio');
-      const client = twilio(accountSid, authToken);
-      await client.messages.create({
-        body: `Your verification OTP is: ${otp}. Valid for 5 minutes.`,
-        from,
-        to: phone,
-      });
+      const axios = require('axios');
+      const url = `https://2factor.in/API/V1/${smsApiKey}/SMS/${phone}/${otp}`;
+      const smsRes = await axios.get(url);
+      if (smsRes.data?.Status !== 'Success') {
+        console.error('[OtpService] 2Factor.in did not report success:', smsRes.data);
+      }
     } catch (err) {
-      console.error('[OtpService] Failed to send SMS:', err.message);
+      console.error('[OtpService] Failed to send SMS via 2Factor.in:', err.message);
     }
   }
 }

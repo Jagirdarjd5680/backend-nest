@@ -1,6 +1,7 @@
-import { Injectable, BadRequestException, NotFoundException, ForbiddenException, InternalServerErrorException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, ForbiddenException, InternalServerErrorException, Optional } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { MediaService } from '../media/media.service';
+import { R2Service } from '../r2/r2.service'; // [r2]
 import { UploadChunkDto } from './dto/upload-chunk.dto';
 import { QueryUploadsDto } from './dto/query-uploads.dto';
 import { BulkDeleteDto } from './dto/bulk-delete.dto';
@@ -14,10 +15,42 @@ export class UploadsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly mediaService: MediaService,
+    @Optional() private readonly r2?: R2Service, // [r2]
   ) {
     if (!fs.existsSync(this.uploadsDir)) {
       fs.mkdirSync(this.uploadsDir, { recursive: true });
     }
+  }
+
+  /**
+   * Runs HLS conversion in the background. Must start only AFTER the media row with this videoId
+   * is saved — otherwise a short video finishes first and its "ready" update matches no row,
+   * leaving the card stuck at "converting 1%" forever.
+   */
+  private startHlsConversion(rawPath: string, videoId: string) {
+    let lastPct = 0;
+    this.mediaService
+      .processVideoToHls(rawPath, videoId, async (pct) => {
+        if (pct <= lastPct) return; // progress writes are async — never let an older one win
+        lastPct = pct;
+        await this.prisma.media.updateMany({ where: { videoId, status: 'processing' }, data: { processingProgress: pct } });
+      })
+      .then(async (res) => {
+        await this.prisma.media.updateMany({
+          where: { videoId },
+          data: { url: res.streamUrl, thumbnailUrl: res.thumbnailUrl, status: 'ready', format: 'm3u8', processingProgress: 100 },
+        });
+        // [r2] move the encrypted chunks to the bucket (playlists + keys stay here)
+        this.r2
+          ?.offloadHlsSegments(videoId, path.join(process.cwd(), 'uploads', 'hls'), path.join(process.cwd(), 'storage', 'hls_keys'))
+          .catch(() => {});
+      })
+      .catch(async (err: any) => {
+        console.error(`❌ [Upload] HLS conversion failed videoId=${videoId}:`, err?.message);
+        await this.prisma.media
+          .updateMany({ where: { videoId }, data: { status: 'failed', failureReason: String(err?.message || 'Conversion failed').slice(0, 250) } })
+          .catch(() => {});
+      });
   }
 
   /**
@@ -60,14 +93,6 @@ export class UploadsService {
     const mimetype = file.mimetype || '';
     let resourceType = 'raw';
 
-    const rawFilePath = path.join(this.uploadsDir, fileName);
-    if (file.buffer) {
-      if (!fs.existsSync(this.uploadsDir)) {
-        fs.mkdirSync(this.uploadsDir, { recursive: true });
-      }
-      fs.writeFileSync(rawFilePath, file.buffer);
-    }
-
     if (mimetype.startsWith('video') || mimetype.startsWith('audio')) {
       resourceType = 'video';
     } else if (mimetype.startsWith('image')) {
@@ -76,31 +101,26 @@ export class UploadsService {
       resourceType = 'pdf';
     }
 
-    let uploadedUrl = `/uploads/${fileName}`;
+    // [r2] when enabled in settings, the file goes to the bucket instead of local disk
+    const bucketUrl = file.buffer
+      ? await this.r2?.tryOffloadBuffer(file.buffer, fileName, mimetype, { isVideo: resourceType === 'video' && !mimetype.startsWith('audio') })
+      : null;
+
+    const rawFilePath = path.join(this.uploadsDir, fileName);
+    if (file.buffer && !bucketUrl) {
+      if (!fs.existsSync(this.uploadsDir)) {
+        fs.mkdirSync(this.uploadsDir, { recursive: true });
+      }
+      fs.writeFileSync(rawFilePath, file.buffer);
+    }
+
+    let uploadedUrl = bucketUrl || `/uploads/${fileName}`;
     let videoId: string | undefined = undefined;
 
-    if (resourceType === 'video' && !mimetype.startsWith('audio')) {
+    if (resourceType === 'video' && !mimetype.startsWith('audio') && !bucketUrl) {
       videoId = `video_${Date.now()}`;
       uploadedUrl = `/api/media/stream/${videoId}/master.m3u8`;
 
-      // Trigger background HLS video transcoding & delete raw video file on completion
-      this.mediaService.processVideoToHls(rawFilePath, videoId, async (pct) => {
-        await this.prisma.media.updateMany({
-          where: { videoId },
-          data: { processingProgress: pct },
-        });
-      }).then(async (res) => {
-        await this.prisma.media.updateMany({
-          where: { videoId },
-          data: {
-            url: res.streamUrl,
-            thumbnailUrl: res.thumbnailUrl,
-            status: 'ready',
-            format: 'm3u8',
-            processingProgress: 100,
-          },
-        });
-      }).catch(() => {});
     }
 
     const safeTitle = (body && body.title) ? body.title : (file.originalname || fileName);
@@ -113,15 +133,16 @@ export class UploadsService {
         url: uploadedUrl,
         fileUrl: uploadedUrl,
         type: resourceType,
-        format: resourceType === 'video' ? 'm3u8' : path.extname(file.originalname || fileName).replace('.', ''),
-        status: resourceType === 'video' ? 'processing' : 'ready',
+        format: resourceType === 'video' && !bucketUrl ? 'm3u8' : path.extname(file.originalname || fileName).replace('.', ''),
+        status: resourceType === 'video' && !bucketUrl ? 'processing' : 'ready',
         size: BigInt(file.size || 0),
         videoId: videoId || null,
         uploadedById: userId ? String(userId) : null,
         courseId: safeCourseId,
-        processingProgress: resourceType === 'video' ? 1 : 100,
+        processingProgress: resourceType === 'video' && !bucketUrl ? 1 : 100,
       },
     });
+    if (videoId) this.startHlsConversion(rawFilePath, videoId);
 
     return {
       success: true,
@@ -214,81 +235,89 @@ export class UploadsService {
     else if (fileName.match(/\.(jpg|jpeg|png|webp|gif)$/i)) resourceType = 'image';
     else if (fileName.match(/\.pdf$/i)) resourceType = 'pdf';
 
-    // Update or create Media database record
+    // Update or create Media database record. The client sends chunks in parallel, so the
+    // counter must be an atomic increment and two "first" chunks may race on the create.
+    const increment = () => this.prisma.media.update({ where: { uploadId }, data: { uploadedChunks: { increment: 1 } } });
     let media = await this.prisma.media.findUnique({ where: { uploadId } });
 
     if (!media) {
-      media = await this.prisma.media.create({
-        data: {
-          name: title || fileName,
-          url: `pending_${uploadId}`,
-          type: resourceType,
-          format: 'temp',
-          status: 'uploading',
-          size: BigInt(fileSize && fileSize > 0 ? fileSize : 0),
-          uploadedById: userId != null ? String(userId) : null,
-          courseId: courseId ? String(courseId) : null,
-          uploadId,
-          totalChunks,
-          uploadedChunks: 1,
-          processingProgress: 1,
-        },
-      });
+      try {
+        media = await this.prisma.media.create({
+          data: {
+            name: title || fileName,
+            url: `pending_${uploadId}`,
+            type: resourceType,
+            format: 'temp',
+            status: 'uploading',
+            size: BigInt(fileSize && fileSize > 0 ? fileSize : 0),
+            uploadedById: userId != null ? String(userId) : null,
+            courseId: courseId ? String(courseId) : null,
+            uploadId,
+            totalChunks,
+            uploadedChunks: 1,
+            processingProgress: 1,
+          },
+        });
+      } catch (err: any) {
+        if (err?.code !== 'P2002') throw err;
+        media = await increment(); // another chunk created the row first
+      }
     } else {
-      const currentUploaded = (media.uploadedChunks || 0) + 1;
-      media = await this.prisma.media.update({
-        where: { uploadId },
-        data: {
-          uploadedChunks: currentUploaded,
-        },
-      });
+      media = await increment();
     }
 
     const completedChunks = media.uploadedChunks || 1;
-    const isCompleted = completedChunks >= totalChunks;
+    // Clients send the last chunk only after every other chunk succeeded, so it finishes the
+    // upload. (Not the counter: a retried chunk that had actually landed would count twice.)
+    const isCompleted = chunkIndex === totalChunks - 1;
 
     if (isCompleted) {
       const actualSize = fs.existsSync(finalPath) ? fs.statSync(finalPath).size : fileSize;
       const ext = path.extname(fileName).toLowerCase();
 
-      let finalUrl = `/uploads/${finalFileName}`;
+      const isHlsVideo = resourceType === 'video' && !ext.match(/\.(mp3|wav)$/i);
+      // [r2] when enabled in settings, move the assembled file to the bucket
+      const bucketUrl = await this.r2?.tryOffloadFile(finalPath, finalFileName, { isVideo: isHlsVideo });
+
+      let finalUrl = bucketUrl || `/uploads/${finalFileName}`;
       let videoId: string | undefined = undefined;
 
-      if (resourceType === 'video' && !ext.match(/\.(mp3|wav)$/i)) {
+      if (isHlsVideo && !bucketUrl) {
         videoId = `video_${Date.now()}`;
         finalUrl = `/api/media/stream/${videoId}/master.m3u8`;
 
-        // Trigger background HLS video transcoding for chunked upload & delete raw video file on completion
-        this.mediaService.processVideoToHls(finalPath, videoId, async (pct) => {
-          await this.prisma.media.updateMany({
-            where: { videoId },
-            data: { processingProgress: pct },
-          });
-        }).then(async (res) => {
-          await this.prisma.media.updateMany({
-            where: { videoId },
-            data: {
-              url: res.streamUrl,
-              thumbnailUrl: res.thumbnailUrl,
-              status: 'ready',
-              format: 'm3u8',
-              processingProgress: 100,
-            },
-          });
-        }).catch(() => {});
       }
 
-      media = await this.prisma.media.update({
+      const updated = await this.prisma.media.updateMany({
         where: { uploadId },
         data: {
           url: finalUrl,
           size: BigInt(actualSize || 0),
-          format: resourceType === 'video' ? 'm3u8' : ext.replace('.', ''),
-          status: resourceType === 'video' ? 'processing' : 'ready',
+          format: videoId ? 'm3u8' : ext.replace('.', ''),
+          status: videoId ? 'processing' : 'ready',
           videoId,
-          processingProgress: resourceType === 'video' ? 1 : 100,
+          processingProgress: videoId ? 1 : 100,
         },
       });
+      // The row was deleted from the library while the file was still being finalized —
+      // discard the file instead of leaving it orphaned on disk / in the bucket.
+      if (!updated.count) {
+        if (bucketUrl) await this.r2?.deleteByUrl(bucketUrl); // [r2]
+        else if (fs.existsSync(finalPath)) fs.promises.unlink(finalPath).catch(() => {});
+        return { success: true, message: 'Upload discarded — the file was deleted from the library', progress: 100 };
+      }
+      if (videoId) this.startHlsConversion(finalPath, videoId);
+
+      // Same shape as handleDirectUpload, so callers can read `url` whatever the file size.
+      return {
+        success: true,
+        url: finalUrl,
+        resource_type: resourceType,
+        format: videoId ? 'm3u8' : ext.replace('.', ''),
+        id: media.id,
+        message: 'Upload complete',
+        progress: 100,
+      };
     }
 
     return {
@@ -328,6 +357,7 @@ export class UploadsService {
       }),
     ]);
 
+    const healed: string[] = [];
     const formattedFiles = files.map((m) => {
       let finalUrl = m.url;
       if (finalUrl && finalUrl.includes('/api/media/stream/')) {
@@ -336,7 +366,13 @@ export class UploadsService {
           finalUrl = `/uploads/${path.basename(m.name)}`;
         }
       }
-      const liveProgress = m.videoId ? this.mediaService.getHlsProgress(m.videoId) : 0;
+      // Self-heal rows left at "processing" although conversion already finished on disk.
+      if (m.status === 'processing' && m.videoId && this.mediaService.isHlsReady(m.videoId)) {
+        healed.push(m.videoId);
+        return { ...m, status: 'ready', url: finalUrl, fileUrl: finalUrl, processingProgress: 100,
+          thumbnailUrl: m.thumbnailUrl || `/uploads/thumbnails/${m.videoId}.jpg`, size: m.size ? m.size.toString() : '0' };
+      }
+      const liveProgress = m.status === 'processing' && m.videoId ? this.mediaService.getHlsProgress(m.videoId) : 0;
       const progress = liveProgress > 0 ? liveProgress : (m.processingProgress || 0);
 
       return {
@@ -349,13 +385,26 @@ export class UploadsService {
       };
     });
 
+    if (healed.length) {
+      await this.prisma.media.updateMany({
+        where: { videoId: { in: healed }, status: 'processing' },
+        data: { status: 'ready', processingProgress: 100 },
+      });
+    }
+
+    // [r2] tag videos whose encrypted chunks live in the bucket (for the CLOUD badge)
+    const hlsBase = path.join(process.cwd(), 'uploads', 'hls');
+    const data = formattedFiles.map((f) =>
+      f.videoId && this.r2?.hlsInBucket(f.videoId, hlsBase) ? { ...f, storageProvider: 'r2' } : f,
+    );
+
     return {
       success: true,
       total,
       page,
       totalPages: Math.ceil(total / limit),
-      count: formattedFiles.length,
-      data: formattedFiles,
+      count: data.length,
+      data,
     };
   }
 
@@ -395,6 +444,7 @@ export class UploadsService {
       if (user.role !== 'admin' && file.uploadedById !== user.id) {
         continue;
       }
+      await this.r2?.deleteByUrl(file.url); // [r2] no-op for local files
       // file.name is the display title (e.g. "photo.jpg"), not the on-disk filename —
       // the actual saved file lives at the basename of file.url (e.g. "1699999999_photo.jpg").
       const diskFileName = file.url ? path.basename(file.url) : file.name;
@@ -405,6 +455,8 @@ export class UploadsService {
         } catch (e) {}
       }
       if (file.videoId) {
+        this.mediaService.deleteHlsKey(file.videoId);
+        this.r2?.deleteHlsSegments(file.videoId); // [r2]
         const hlsFolder = path.join(process.cwd(), 'uploads', 'hls', file.videoId);
         if (fs.existsSync(hlsFolder)) {
           try {
@@ -449,6 +501,8 @@ export class UploadsService {
       throw new ForbiddenException('You do not have permission to delete this file');
     }
 
+    await this.r2?.deleteByUrl(media.url); // [r2] no-op for local files
+
     const diskFileName = media.url ? path.basename(media.url) : filename;
     const filePath = path.join(this.uploadsDir, diskFileName);
     if (fs.existsSync(filePath)) {
@@ -458,6 +512,8 @@ export class UploadsService {
     }
 
     if (media.videoId) {
+      this.mediaService.deleteHlsKey(media.videoId);
+      this.r2?.deleteHlsSegments(media.videoId); // [r2]
       const hlsFolder = path.join(process.cwd(), 'uploads', 'hls', media.videoId);
       if (fs.existsSync(hlsFolder)) {
         try {

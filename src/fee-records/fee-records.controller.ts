@@ -1,3 +1,5 @@
+import { Roles } from '../auth/roles.decorator';
+import { RolesGuard } from '../auth/roles.guard';
 import { Controller, Get, Post, Put, Patch, Delete, Param, Body, UseGuards, Res, Request } from '@nestjs/common';
 import { FeeRecordsService } from './fee-records.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -9,6 +11,8 @@ export class FeeRecordsController {
   constructor(private service: FeeRecordsService) {}
 
   @Get()
+  @UseGuards(RolesGuard)
+  @Roles('admin', 'teacher')
   async findAll() {
     return this.service.findAll();
   }
@@ -42,6 +46,8 @@ export class FeeRecordsController {
   }
 
   @Get('user/:userId')
+  @UseGuards(RolesGuard)
+  @Roles('admin', 'teacher')
   async findByUserId(@Param('userId') userId: string) {
     const records = await this.service.findByUserId(parseInt(userId, 10));
     return { success: true, data: records };
@@ -50,11 +56,15 @@ export class FeeRecordsController {
   // ─── General CRUD ──────────────────────────────────────────────────────────
 
   @Get(':id')
+  @UseGuards(RolesGuard)
+  @Roles('admin', 'teacher')
   async findOne(@Param('id') id: string) {
     return this.service.findOne(parseInt(id, 10));
   }
 
   @Post()
+  @UseGuards(RolesGuard)
+  @Roles('admin', 'teacher')
   async create(@Body() data: any) {
     return this.service.create(data);
   }
@@ -63,11 +73,15 @@ export class FeeRecordsController {
   // an alias so any other PATCH-based caller keeps working too.
   @Put(':id')
   @Patch(':id')
+  @UseGuards(RolesGuard)
+  @Roles('admin', 'teacher')
   async update(@Param('id') id: string, @Body() data: any) {
     return this.service.update(parseInt(id, 10), data);
   }
 
   @Delete(':id')
+  @UseGuards(RolesGuard)
+  @Roles('admin', 'teacher')
   async remove(@Param('id') id: string) {
     return this.service.remove(parseInt(id, 10));
   }

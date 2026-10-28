@@ -1,3 +1,5 @@
+import { Roles } from '../auth/roles.decorator';
+import { RolesGuard } from '../auth/roles.guard';
 import {
   Controller,
   Get,
@@ -21,14 +23,18 @@ import { GradeSubmissionDto } from './dto/grade-submission.dto';
 export class AssignmentsController {
   constructor(private service: AssignmentsService) {}
 
-  // ─── Specific GET routes FIRST (Public/Flexible read access) ─────────────
+  // ─── Specific GET routes FIRST (staff only — they list every student's work) ─
 
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin', 'teacher')
   @Get('all-submissions')
   async getAllSubmissions(@Query('limit') limit?: string) {
     const lim = limit ? parseInt(limit, 10) : 10;
     return this.service.findAllSubmissions(isNaN(lim) ? 10 : lim);
   }
 
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin', 'teacher')
   @Get('batch/:batchId/submissions')
   async getBatchSubmissions(@Param('batchId') batchId: string) {
     const numId = parseInt(batchId, 10);
@@ -46,11 +52,15 @@ export class AssignmentsController {
     return this.service.findBatchSubmissions(numId);
   }
 
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin', 'teacher')
   @Get('unlocks/all')
   async getUnlocks() {
     return this.service.findAllUnlocks();
   }
 
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin', 'teacher')
   @Get('materials/all')
   async getMaterials() {
     return this.service.findAllMaterials();
@@ -73,8 +83,9 @@ export class AssignmentsController {
 
   // ─── Protected Mutations ───────────────────────────────────────────────────
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Post()
+  @Roles('admin', 'teacher')
   async create(@Body() data: CreateAssignmentDto) {
     return this.service.createAssignment(data);
   }
@@ -90,8 +101,9 @@ export class AssignmentsController {
     return this.service.submitAssignment(numId, req.user.id, data);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Put('submissions/:submissionId/grade')
+  @Roles('admin', 'teacher')
   async gradeSubmission(
     @Param('submissionId') submissionId: string,
     @Body() data: GradeSubmissionDto,
@@ -100,45 +112,51 @@ export class AssignmentsController {
     return this.service.gradeSubmission(numId, data);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Put(':id/grade')
+  @Roles('admin', 'teacher')
   async gradeAssignmentLegacy(@Param('id') id: string, @Body() data: GradeSubmissionDto) {
     const numId = parseInt(id, 10);
     return this.service.gradeSubmission(numId, data);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Put(':id')
+  @Roles('admin', 'teacher')
   async updatePut(@Param('id') id: string, @Body() data: UpdateAssignmentDto) {
     const numId = parseInt(id, 10);
     if (isNaN(numId)) return { success: false, message: 'Invalid ID' };
     return this.service.updateAssignment(numId, data);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Patch(':id')
+  @Roles('admin', 'teacher')
   async updatePatch(@Param('id') id: string, @Body() data: UpdateAssignmentDto) {
     const numId = parseInt(id, 10);
     if (isNaN(numId)) return { success: false, message: 'Invalid ID' };
     return this.service.updateAssignment(numId, data);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Delete(':id')
+  @Roles('admin', 'teacher')
   async remove(@Param('id') id: string) {
     const numId = parseInt(id, 10);
     if (isNaN(numId)) return { success: false, message: 'Invalid ID' };
     return this.service.removeAssignment(numId);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Post('unlock')
+  @Roles('admin', 'teacher')
   async unlock(@Body() data: any) {
     return this.service.unlockAssignment(data);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Post('materials')
+  @Roles('admin', 'teacher')
   async createMaterial(@Body() data: any) {
     return this.service.createMaterial(data);
   }

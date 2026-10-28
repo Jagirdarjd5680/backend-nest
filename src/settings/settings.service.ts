@@ -26,6 +26,10 @@ const DEFAULT_SETTINGS = {
     allowEmailLogin: true,
     allowMobileOtpLogin: false,
     twoFactorEnabled: false,
+    // 'test': OTP is never actually sent by SMS — it only goes to the server console/terminal,
+    // so QA/dev logins never burn a real SMS credit. 'production': a real SMS goes out via
+    // 2Factor.in using integrations.smsApiKey (falls back to console-only if that key is empty).
+    otpMode: 'test',
   },
   theme: {
     primaryColor: '#3f51b5',
@@ -49,6 +53,8 @@ const DEFAULT_SETTINGS = {
   integrations: {
     googleClientId: '',
     recaptchaKey: '',
+    smsProvider: '2Factor.in',
+    smsApiKey: '',
   },
   storage: {
     activeProvider: 'local',
@@ -150,6 +156,16 @@ export class SettingsService {
       allowEmailLogin: boolean;
       allowMobileOtpLogin: boolean;
       twoFactorEnabled: boolean;
+      otpMode: 'test' | 'production';
+    };
+  }
+
+  /** Internal use (AuthService's sendOtp) — the SMS provider config needed to actually send one. */
+  async getSmsSettings() {
+    const all = await this._buildSettingsObject();
+    return {
+      otpMode: (all.auth?.otpMode as 'test' | 'production') || 'test',
+      smsApiKey: all.integrations?.smsApiKey || '',
     };
   }
 

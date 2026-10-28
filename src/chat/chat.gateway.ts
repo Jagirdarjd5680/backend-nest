@@ -86,10 +86,29 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.server.emit('presence', { userId, online: false, lastSeenAt: lastSeenAt.toISOString() });
   }
 
+  /**
+   * Rooms carry private messages (user_<id> = someone's inbox, session_<id> = a tutoring chat),
+   * so a socket may only join a session it takes part in. Staff can join any session.
+   */
   @SubscribeMessage('join_room')
-  handleJoinRoom(@MessageBody() data: { room: string }, @ConnectedSocket() client: Socket) {
-    client.join(data.room);
-    return { event: 'joined', room: data.room };
+  async handleJoinRoom(@MessageBody() data: { room: string }, @ConnectedSocket() client: Socket) {
+    const room = String(data?.room || '');
+    const userId = Number(client.data?.userId);
+    const session = /^session_(\d+)$/.exec(room);
+    let allowed = false;
+    if (room === `user_${userId}`) allowed = true;
+    else if (session && userId) {
+      if (['admin', 'teacher'].includes(client.data?.role)) allowed = true;
+      else {
+        const s = await this.prisma.supportSession
+          .findUnique({ where: { id: Number(session[1]) }, select: { studentId: true, tutor: { select: { userId: true } } } })
+          .catch(() => null);
+        allowed = !!s && (s.studentId === userId || s.tutor?.userId === userId);
+      }
+    }
+    if (!allowed) return { event: 'join_denied', room };
+    client.join(room);
+    return { event: 'joined', room };
   }
 
   @SubscribeMessage('leave_room')

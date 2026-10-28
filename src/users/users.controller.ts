@@ -1,4 +1,7 @@
-import { Controller, Get, Post, Put, Delete, Query, UseGuards, Param, Body, Request, ForbiddenException, BadRequestException } from '@nestjs/common';
+import { Controller, Get, Post, Put, Delete, Query, UseGuards, UseInterceptors, UploadedFile, Param, Body, Request, ForbiddenException, BadRequestException } from '@nestjs/common';
+import { assertSelfOrStaff } from '../common/access';
+import { FileInterceptor } from '@nestjs/platform-express';
+import * as multer from 'multer';
 import { UsersService } from './users.service';
 import { FeeRecordsService } from '../fee-records/fee-records.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -96,6 +99,26 @@ export class UsersController {
     return { success: true, data: user, message: 'Profile updated' };
   }
 
+  @Put('me/name')
+  async updateOwnName(@Request() req: any, @Body() body: { name: string }) {
+    const user = await this.usersService.updateOwnName(req.user.id, body.name);
+    return { success: true, data: user, message: 'Name updated' };
+  }
+
+  @Post('me/avatar')
+  @UseInterceptors(
+    FileInterceptor('avatar', {
+      storage: multer.memoryStorage(),
+      // 1MB + a little slack so multer's own rejection message doesn't hide the friendlier
+      // "1MB or smaller" one thrown in the service for anything actually over the real limit.
+      limits: { fileSize: 1.2 * 1024 * 1024 },
+    }),
+  )
+  async updateOwnAvatar(@Request() req: any, @UploadedFile() avatar: any) {
+    const user = await this.usersService.updateAvatar(req.user.id, avatar);
+    return { success: true, data: user, message: 'Profile photo updated' };
+  }
+
   @Post('request-registration')
   async requestRegistration() {
     return { success: true, message: 'Registration request sent' };
@@ -124,7 +147,8 @@ export class UsersController {
   }
 
   @Put(':id/biometric-face')
-  async updateBiometricFace(@Param('id') id: string, @Body() body: any) {
+  async updateBiometricFace(@Param('id') id: string, @Body() body: any, @Request() req: any) {
+    assertSelfOrStaff(req.user, parseInt(id, 10)); // else anyone could swap a student's face for attendance
     const user = await this.usersService.updateBiometricFace(parseInt(id, 10), body);
     return { success: true, data: user, message: 'Biometric updated' };
   }
@@ -151,9 +175,19 @@ export class UsersController {
     return this.feeRecordsService.sendRegistrationLetterEmail(userId, latestEnrollment);
   }
 
+  // Must stay above `:id`, otherwise "me" is parsed as an id (NaN) and Prisma throws.
+  @Get('me')
+  async findMe(@Request() req: any) {
+    const userDetails = await this.usersService.findByIdDetails(req.user.id);
+    return { success: true, data: userDetails };
+  }
+
   @Get(':id')
-  async findOne(@Param('id') id: string) {
-    const userDetails = await this.usersService.findByIdDetails(parseInt(id, 10));
+  async findOne(@Param('id') id: string, @Request() req: any) {
+    const userId = parseInt(id, 10);
+    if (Number.isNaN(userId)) throw new BadRequestException(`Invalid user id: ${id}`);
+    assertSelfOrStaff(req.user, userId);
+    const userDetails = await this.usersService.findByIdDetails(userId);
     return { success: true, data: userDetails };
   }
 

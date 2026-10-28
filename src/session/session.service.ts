@@ -2,11 +2,14 @@ import { ForbiddenException, Injectable } from '@nestjs/common';
 import * as crypto from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { GamificationService } from '../gamification/gamification.service';
+import { ExpoPushService } from '../notifications/expo-push.service';
+import { TemporaryBlockException } from '../common/exceptions/temporary-block.exception';
 
 export type DeviceInfo = { deviceId: string; deviceLabel?: string; ip?: string };
 
 const BLOCK_AFTER_STRIKES = 3;
 const WARNING_AFTER_STRIKES = 2;
+const TEMP_BLOCK_MS = 60_000;
 
 /**
  * Everything to do with "which device is this account logged in on right
@@ -19,6 +22,7 @@ export class SessionService {
   constructor(
     private prisma: PrismaService,
     private gamificationService: GamificationService,
+    private expoPushService: ExpoPushService,
   ) {}
 
   generateTokenId(): string {
@@ -39,6 +43,14 @@ export class SessionService {
 
     if (user.isBlocked) {
       throw new ForbiddenException(user.blockedReason || 'This account has been blocked. Please contact support.');
+    }
+    if (user.blockedUntil && user.blockedUntil.getTime() > Date.now()) {
+      // Same timestamp every time, not "now + 60s" recomputed on each hit — otherwise a client
+      // that keeps retrying (or auto-refreshing) during the cooldown would never see it expire.
+      throw new TemporaryBlockException(
+        user.blockedReason || 'Too many logins from different devices. Please try again shortly.',
+        user.blockedUntil,
+      );
     }
 
     const enforceSingleDevice = role === 'student';
@@ -71,13 +83,20 @@ export class SessionService {
         await this.recordActivity(userId, 'forced_logout', device);
 
         if (forcedLogoutStrikes >= BLOCK_AFTER_STRIKES) {
-          const blockedReason = 'Account blocked: repeated logins from multiple devices';
+          const blockedReason = 'Too many logins from different devices (web, app, Android, iOS…). Please wait 60 seconds and try again.';
+          const blockedUntil = new Date(Date.now() + TEMP_BLOCK_MS);
+          // Temporary cooldown, not a permanent lock — strikes reset so the account is usable
+          // again the moment the cooldown expires, instead of sitting blocked until an admin
+          // manually clears it (that's still what `isBlocked` is for — a deliberate admin ban).
           await this.prisma.user.update({
             where: { id: userId },
-            data: { isBlocked: true, blockedAt: new Date(), blockedReason },
+            data: { blockedUntil, blockedReason, forcedLogoutStrikes: 0 },
           });
           await this.recordActivity(userId, 'blocked', device);
-          throw new ForbiddenException(blockedReason);
+          this.expoPushService
+            .sendToUser(userId, 'Account temporarily locked', blockedReason)
+            .catch(() => {});
+          throw new TemporaryBlockException(blockedReason, blockedUntil);
         }
         if (forcedLogoutStrikes >= WARNING_AFTER_STRIKES) {
           await this.recordActivity(userId, 'warning', device);
@@ -131,7 +150,7 @@ export class SessionService {
   async unblock(userId: number) {
     await this.prisma.user.update({
       where: { id: userId },
-      data: { isBlocked: false, blockedAt: null, blockedReason: null, forcedLogoutStrikes: 0 },
+      data: { isBlocked: false, blockedAt: null, blockedUntil: null, blockedReason: null, forcedLogoutStrikes: 0 },
     });
     await this.recordActivity(userId, 'unblocked');
   }
@@ -149,7 +168,7 @@ export class SessionService {
   async getAccountStatus(userId: number) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { isBlocked: true, blockedAt: true, blockedReason: true, forcedLogoutStrikes: true },
+      select: { isBlocked: true, blockedAt: true, blockedUntil: true, blockedReason: true, forcedLogoutStrikes: true },
     });
     return user;
   }

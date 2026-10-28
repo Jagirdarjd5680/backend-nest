@@ -12,6 +12,11 @@ const RESPONSE_SIGNED_TTL_SECONDS = 15 * 60;
 
 const UPLOADS_PATH = /^\/uploads\/(?!hls\/)/;
 
+// An already-signed URL that got saved into the DB verbatim (e.g. the admin media picker hands
+// back a signed URL and a form stores it). Its baked-in token expires after the TTL above, so
+// re-sign it on the way out just like a raw /uploads path. Optional host prefix is kept.
+const STORED_SIGNED_URL = /^(\S*?)\/api\/secure-media\/file\?(\S+)$/;
+
 /**
  * Web's fixUrl() (frontend/src/utils/api.js) is synchronous and called inline in JSX across the
  * whole admin panel — there's no per-render hook point to fetch a fresh token like the native app
@@ -31,17 +36,32 @@ export class MediaUrlSigningInterceptor implements NestInterceptor {
     const request = context.switchToHttp().getRequest();
     const userId = Number(request?.user?.id || request?.user?._id);
 
-    return next.handle().pipe(map((data) => (Number.isFinite(userId) && userId > 0 ? this.transform(data, userId) : data)));
+    const res = context.switchToHttp().getResponse();
+    // Already-sent replies (@Res handlers) can hand back the circular Express response object.
+    return next.handle().pipe(
+      map((data) => (!res?.headersSent && Number.isFinite(userId) && userId > 0 ? this.transform(data, userId) : data)),
+    );
   }
 
   private transform(value: any, userId: number): any {
     if (value === null || value === undefined) return value;
 
     if (typeof value === 'string') {
-      if (!UPLOADS_PATH.test(value)) return value;
-      const relativePath = value.replace(/^\/uploads\//, '').split('?')[0];
-      const { token } = this.mediaAccessService.signMediaToken(userId, relativePath, RESPONSE_SIGNED_TTL_SECONDS);
-      return `/api/secure-media/file?path=${encodeURIComponent(relativePath)}&token=${encodeURIComponent(token)}`;
+      if (UPLOADS_PATH.test(value)) {
+        const relativePath = value.replace(/^\/uploads\//, '').split('?')[0];
+        const { token } = this.mediaAccessService.signMediaToken(userId, relativePath, RESPONSE_SIGNED_TTL_SECONDS);
+        return `/api/secure-media/file?path=${encodeURIComponent(relativePath)}&token=${encodeURIComponent(token)}`;
+      }
+      const stored = value.match(STORED_SIGNED_URL);
+      if (stored) {
+        const params = new URLSearchParams(stored[2]);
+        const relativePath = params.get('path');
+        if (!relativePath) return value;
+        const { token } = this.mediaAccessService.signMediaToken(userId, relativePath, RESPONSE_SIGNED_TTL_SECONDS);
+        params.set('token', token);
+        return `${stored[1]}/api/secure-media/file?${params.toString()}`;
+      }
+      return value;
     }
 
     if (Array.isArray(value)) {

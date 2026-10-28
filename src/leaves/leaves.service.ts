@@ -18,6 +18,10 @@ export class LeavesService {
     });
   }
 
+  async findByUser(userId: number): Promise<LeaveRequest[]> {
+    return this.prisma.leaveRequest.findMany({ where: { userId }, orderBy: { createdAt: 'desc' } });
+  }
+
   async findOne(id: number): Promise<LeaveRequest> {
     const req = await this.prisma.leaveRequest.findUnique({
       where: { id },

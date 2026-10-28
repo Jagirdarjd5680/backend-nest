@@ -9,9 +9,11 @@ import { SettingsService } from '../settings/settings.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { REALTIME_EVENTS } from '../realtime/events';
 import { GamificationService } from '../gamification/gamification.service';
+import { ExpoPushService } from '../notifications/expo-push.service';
 import * as bcrypt from 'bcryptjs';
 import * as crypto from 'crypto';
 import * as MailChecker from 'mailchecker';
+import { normalizePhone } from '../common/phone.util';
 
 const FALLBACK_DEVICE: DeviceInfo = { deviceId: 'unknown-device' };
 
@@ -27,6 +29,7 @@ export class AuthService {
     private settingsService: SettingsService,
     private realtimeService: RealtimeService,
     private gamificationService: GamificationService,
+    private expoPushService: ExpoPushService,
   ) {}
 
   /** `identifier` may be an email OR a phone number — whichever the student set up/registered
@@ -273,16 +276,32 @@ export class AuthService {
   }
 
   // ─── OTP Login ───────────────────────────────────────────────────────────
-  async sendOtp(phone: string) {
+  async sendOtp(rawPhone: string) {
+    const phone = normalizePhone(rawPhone);
+    try {
+      await this.otpService.checkSendCooldown(phone);
+    } catch (err) {
+      // Best-effort — only if this phone actually belongs to a registered user with a push
+      // token on file; an unregistered number spamming send-otp has nothing to push to.
+      const user = await this.prisma.user.findFirst({ where: { phone: { endsWith: phone.slice(-10) } } });
+      if (user) {
+        this.expoPushService
+          .sendToUser(user.id, 'Too many OTP requests', 'Please wait 60 seconds before requesting another code.')
+          .catch(() => {});
+      }
+      throw err;
+    }
     const otp = await this.otpService.generateOtp(phone);
-    await this.otpService.sendSmsOtp(phone, otp);
+    const { otpMode, smsApiKey } = await this.settingsService.getSmsSettings();
+    await this.otpService.sendSmsOtp(phone, otp, otpMode, smsApiKey);
     return {
       success: true,
       message: `OTP sent to ${phone}`,
     };
   }
 
-  async verifyOtpLogin(phone: string, otp: string, device: DeviceInfo = FALLBACK_DEVICE, referralCode?: string) {
+  async verifyOtpLogin(rawPhone: string, otp: string, device: DeviceInfo = FALLBACK_DEVICE, referralCode?: string) {
+    const phone = normalizePhone(rawPhone);
     const valid = await this.otpService.verifyOtp(phone, otp);
     if (!valid) throw new BadRequestException('Invalid or expired OTP');
 
@@ -333,8 +352,13 @@ export class AuthService {
   private async _needsReferralPrompt(userId: number): Promise<boolean> {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { referralPromptSkippedAt: true },
+      select: { referralPromptSkippedAt: true, role: true },
     });
+    // Referrals are a student-signup feature — admins/tutors logging in via OTP were being
+    // routed into the "enter referral code" screen on every login because this check ran
+    // unconditionally, racing against (and getting overwritten by) the auth guard's redirect
+    // into the admin panel in app/_layout.tsx.
+    if (user?.role !== 'student') return false;
     if (user?.referralPromptSkippedAt) return false;
     const existing = await this.prisma.referral.findFirst({ where: { referredId: userId } });
     return !existing;
