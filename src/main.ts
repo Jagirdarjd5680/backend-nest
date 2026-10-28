@@ -1,4 +1,5 @@
 import { NestFactory } from '@nestjs/core';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import { ValidationPipe } from '@nestjs/common';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
@@ -18,7 +19,12 @@ import { r2HlsSegments } from './r2/r2-hls.middleware'; // [r2]
 dotenv.config();
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+
+  // Behind nginx on the same machine: take the client IP from X-Forwarded-For, or every visitor
+  // looks like 127.0.0.1 and they all share one rate-limit bucket. 'loopback' = trust only a
+  // local proxy, so a client can't spoof its IP by sending the header itself.
+  app.set('trust proxy', 'loopback');
 
   // Standard HTTP-header hardening (clickjacking, MIME sniffing, etc.). CSP disabled: this API
   // serves HLS playlists/segments and uploaded media directly, and the default CSP would block them.
