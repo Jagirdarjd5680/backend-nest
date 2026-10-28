@@ -1,7 +1,8 @@
+import { ContentChangeInterceptor } from './common/interceptors/content-change.interceptor';
 import { Module } from '@nestjs/common';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { PrismaModule } from './prisma/prisma.module';
 import { UsersModule } from './users/users.module';
 import { AuthModule } from './auth/auth.module';
@@ -128,6 +129,7 @@ import { VideoReviewsModule } from './video-reviews/video-reviews.module';
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },
+    { provide: APP_INTERCEPTOR, useClass: ContentChangeInterceptor },
   ],
 })
 export class AppModule {}

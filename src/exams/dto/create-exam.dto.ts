@@ -1,4 +1,9 @@
 import { IsArray, IsDateString, IsNotEmpty, IsNumber, IsOptional, IsString } from 'class-validator';
+import { Transform } from 'class-transformer';
+
+/** HTML forms send numbers as strings and unset selects as '' — coerce both before validating. */
+const OptNumber = () => Transform(({ value }) => (value === '' || value === null || value === undefined ? undefined : Number(value)));
+const OptDate = () => Transform(({ value }) => (value === '' || value === null ? undefined : value));
 
 export class CreateExamDto {
   @IsString()
@@ -9,30 +14,37 @@ export class CreateExamDto {
   @IsOptional()
   description?: string;
 
+  @OptNumber()
   @IsNumber()
   @IsOptional()
   duration?: number;
 
+  @OptNumber()
   @IsNumber()
   @IsOptional()
   totalMarks?: number;
 
+  @OptNumber()
   @IsNumber()
   @IsOptional()
   passingMarks?: number;
 
+  @OptDate()
   @IsDateString()
   @IsOptional()
   startDate?: string;
 
+  @OptDate()
   @IsDateString()
   @IsOptional()
   endDate?: string;
 
+  @OptNumber()
   @IsNumber()
   @IsOptional()
   courseId?: number;
 
+  @OptNumber()
   @IsNumber()
   @IsOptional()
   moduleId?: number;

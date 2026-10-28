@@ -84,8 +84,8 @@ export class NotificationsController {
       pushResult = {
         success: !!result.success,
         sent: result.sent,
-        failed: result.success ? 0 : 1,
-        errors: result.success ? [] : [result.reason].filter(Boolean),
+        failed: (result as any).failed ?? 0,
+        errors: [result.reason].filter(Boolean),
       };
     }
 

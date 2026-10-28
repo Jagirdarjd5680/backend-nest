@@ -35,6 +35,13 @@ export class TicketsController {
     return this.service.update(parseInt(id, 10), isStaff(req.user) ? data : rest);
   }
 
+  @Post(':id/reply')
+  async reply(@Param('id') id: string, @Body() data: any, @Request() req: any) {
+    await this.owned(id, req.user);
+    const author = isStaff(req.user) ? 'Support team' : req.user.name || 'Student';
+    return this.service.reply(parseInt(id, 10), data?.text ?? data?.message, author);
+  }
+
   @Delete(':id')
   async remove(@Param('id') id: string, @Request() req: any) {
     await this.owned(id, req.user);

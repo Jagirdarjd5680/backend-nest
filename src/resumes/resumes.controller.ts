@@ -1,9 +1,12 @@
-import { Controller, Get, Post, Patch, Delete, Param, Body, UseGuards, Request } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Put, Delete, Param, Body, UseGuards, Request } from '@nestjs/common';
 import { ResumesService } from './resumes.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { assertOwnsRow, isStaff } from '../common/access';
 
-/** Staff manage every resume; anyone else only sees and changes their own. */
+/**
+ * Staff manage every resume; anyone else only sees and changes their own.
+ * Responses are `{ success, data }` — the web ResumeBuilder reads `res.data.data`.
+ */
 @Controller('resumes')
 @UseGuards(JwtAuthGuard)
 export class ResumesController {
@@ -15,29 +18,36 @@ export class ResumesController {
 
   @Get()
   async findAll(@Request() req: any) {
-    return this.service.findAll(isStaff(req.user) ? undefined : req.user.id);
+    return { success: true, data: await this.service.findAll(isStaff(req.user) ? undefined : req.user.id) };
   }
 
   @Get(':id')
   async findOne(@Param('id') id: string, @Request() req: any) {
-    return this.owned(id, req.user);
+    return { success: true, data: await this.owned(id, req.user) };
   }
 
   @Post()
   async create(@Body() data: any, @Request() req: any) {
-    return this.service.create(isStaff(req.user) ? data : { ...data, userId: req.user.id });
+    // Staff may create for a student (`userId`); otherwise it's always the caller's own.
+    const userId = isStaff(req.user) && data?.userId ? Number(data.userId) : req.user.id;
+    return { success: true, data: await this.service.create({ ...data, userId }) };
+  }
+
+  @Put(':id')
+  async replace(@Param('id') id: string, @Body() data: any, @Request() req: any) {
+    return this.update(id, data, req);
   }
 
   @Patch(':id')
   async update(@Param('id') id: string, @Body() data: any, @Request() req: any) {
     await this.owned(id, req.user);
-    const { userId, ...rest } = data || {};
-    return this.service.update(parseInt(id, 10), isStaff(req.user) ? data : rest);
+    return { success: true, data: await this.service.update(parseInt(id, 10), data) };
   }
 
   @Delete(':id')
   async remove(@Param('id') id: string, @Request() req: any) {
     await this.owned(id, req.user);
-    return this.service.remove(parseInt(id, 10));
+    await this.service.remove(parseInt(id, 10));
+    return { success: true };
   }
 }

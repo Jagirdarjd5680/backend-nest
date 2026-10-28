@@ -180,8 +180,11 @@ model Placement {
 
 model Resume {
   id        Int      @id @default(autoincrement())
-  filePath  String
+  filePath  String   @default("")
+  /// Resume-builder document (personalInfo, experience, education, skills, …).
+  data      Json?
   createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
 
   userId Int
   user   User @relation(fields: [userId], references: [id], onDelete: Cascade)

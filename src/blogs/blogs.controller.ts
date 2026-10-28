@@ -3,6 +3,7 @@ import { RolesGuard } from '../auth/roles.guard';
 import { Controller, Get, Post, Patch, Delete, Param, Body, Query, Request, UseGuards } from '@nestjs/common';
 import { BlogsService } from './blogs.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { isStaff } from '../common/access';
 
 @Controller('blogs')
 @UseGuards(JwtAuthGuard)
@@ -11,13 +12,15 @@ export class BlogsController {
 
   @Get()
   async findAll(
+    @Request() req: any,
     @Query('search') search?: string,
     @Query('status') status?: string,
     @Query('limit') limit?: string,
   ) {
     const data = await this.service.findAll({
       search,
-      status,
+      // Students only ever see published posts; staff can filter by any status.
+      status: isStaff(req.user) ? status : 'published',
       limit: limit ? parseInt(limit, 10) : undefined,
     });
     return { success: true, data };
