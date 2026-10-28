@@ -2,6 +2,8 @@ import { Controller, Post, Body, UnauthorizedException, Get, UseGuards, Request,
 import { Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './jwt-auth.guard';
+import { RolesGuard } from './roles.guard';
+import { Roles } from './roles.decorator';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { DeviceInfo } from '../session/session.service';
@@ -55,6 +57,23 @@ export class AuthController {
   @Post('me/two-factor')
   async setTwoFactor(@Body() body: { enabled: boolean }, @Request() req: any) {
     return this.authService.setTwoFactorEnabled(Number(req.user.id || req.user._id), !!body.enabled);
+  }
+
+  /** Link / change the signed-in admin's or teacher's mobile number (OTP-verified) for OTP login. */
+  @Throttle(OTP_THROTTLE)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin', 'teacher')
+  @Post('me/phone/send-otp')
+  async sendPhoneChangeOtp(@Body() body: { phone: string }, @Request() req: any) {
+    return this.authService.sendPhoneChangeOtp(Number(req.user.id), body.phone);
+  }
+
+  @Throttle(OTP_THROTTLE)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin', 'teacher')
+  @Post('me/phone/verify')
+  async verifyPhoneChange(@Body() body: { phone: string; otp: string }, @Request() req: any) {
+    return this.authService.verifyPhoneChange(Number(req.user.id), body.phone, body.otp);
   }
 
   @UseGuards(JwtAuthGuard)

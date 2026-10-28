@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, BadRequestException, ForbiddenException, ConflictException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { UsersService } from '../users/users.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -298,6 +298,33 @@ export class AuthService {
       success: true,
       message: `OTP sent to ${phone}`,
     };
+  }
+
+  /**
+   * Staff linking their own mobile number (so they can sign in with OTP). The number must
+   * be verified first: a typo would otherwise lock them out of OTP login, and an unverified
+   * number could hijack someone else's phone. Rejects numbers owned by another account.
+   */
+  private async _assertPhoneFree(userId: number, rawPhone: string) {
+    const phone = normalizePhone(rawPhone);
+    if (!/^\+91[6-9]\d{9}$/.test(phone)) throw new BadRequestException('Enter a valid 10-digit mobile number');
+    const owner = await this.usersService.findByPhone(phone);
+    if (owner && owner.id !== userId) throw new ConflictException('This mobile number is already linked to another account');
+    return phone;
+  }
+
+  async sendPhoneChangeOtp(userId: number, rawPhone: string) {
+    const phone = await this._assertPhoneFree(userId, rawPhone);
+    return this.sendOtp(phone);
+  }
+
+  async verifyPhoneChange(userId: number, rawPhone: string, otp: string) {
+    const phone = await this._assertPhoneFree(userId, rawPhone);
+    if (!(await this.otpService.verifyOtp(phone, String(otp || '')))) {
+      throw new BadRequestException('Invalid or expired OTP');
+    }
+    const user = await this.prisma.user.update({ where: { id: userId }, data: { phone } });
+    return { success: true, message: 'Mobile number verified', user: this._formatUser(user) };
   }
 
   async verifyOtpLogin(rawPhone: string, otp: string, device: DeviceInfo = FALLBACK_DEVICE, referralCode?: string) {

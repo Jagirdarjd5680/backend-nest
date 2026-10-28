@@ -59,7 +59,6 @@ import { BackupModule } from './backup/backup.module';
 import { GamificationModule } from './gamification/gamification.module';
 import { UploadsModule } from './uploads/uploads.module';
 import { R2Module } from './r2/r2.module'; // [r2]
-import { QueuesModule } from './queues/queues.module';
 import { GoogleReviewsModule } from './google-reviews/google-reviews.module';
 import { VideoReviewsModule } from './video-reviews/video-reviews.module';
 
@@ -68,7 +67,6 @@ import { VideoReviewsModule } from './video-reviews/video-reviews.module';
     ThrottlerModule.forRoot([{ ttl: 60000, limit: 100 }]),
     ScheduleModule.forRoot(),
     PrismaModule,
-    QueuesModule,
     UsersModule,
     AuthModule,
     SessionModule,

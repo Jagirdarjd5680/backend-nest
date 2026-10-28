@@ -10,8 +10,6 @@ import { existsSync } from 'fs';
 import { MongoIdInterceptor } from './common/interceptors/mongo-id.interceptor';
 import { MediaUrlSigningInterceptor } from './media-access/media-url-signing.interceptor';
 import { FriendlyExceptionFilter } from './common/filters/friendly-exception.filter';
-import { hotApiForwarder } from './common/hot-api-forwarder';
-import { hotCacheInvalidator } from './common/hot-cache-invalidator';
 import { decoy404 } from './common/decoy-404';
 import { R2Service } from './r2/r2.service'; // [r2]
 import { r2HlsSegments } from './r2/r2-hls.middleware'; // [r2]
@@ -71,16 +69,6 @@ async function bootstrap() {
     },
     credentials: true,
   });
-
-  // High-traffic routes → python_service FastAPI (falls back to NestJS if it's down).
-  // Must come AFTER enableCors: forwarded replies skip NestJS's own pipeline, so CORS headers have
-  // to be added before they're sent, or the web panel's browser blocks them.
-  // HOT_API_FORWARD=false keeps everything on NestJS.
-  // Admin writes to courses/settings/banners/app-reviews refresh FastAPI's catalog cache instantly.
-  app.use(hotCacheInvalidator());
-  if (process.env.HOT_API_FORWARD !== 'false') {
-    app.use(hotApiForwarder(process.env.HOT_API_URL || process.env.PYTHON_AI_SERVICE_URL || 'http://localhost:8000'));
-  }
 
   // Encrypted HLS segments (AES-128). Useless without the per-user key from /api/media/key, so
   // they're served as plain cacheable static files — no token, no DB, no JWT work per chunk.

@@ -1,13 +1,16 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { FaceMatch, FaceRecognitionService } from './face-recognition.service';
 
-const PYTHON_AI_SERVICE_URL = process.env.PYTHON_AI_SERVICE_URL || 'http://localhost:8000';
 
 @Injectable()
 export class AttendanceService {
   private readonly logger = new Logger(AttendanceService.name);
 
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private faces: FaceRecognitionService,
+  ) {}
 
   async findAll() {
     const attendance = await this.prisma.attendance.findMany({
@@ -107,39 +110,27 @@ export class AttendanceService {
 
   /**
    * Enrolls (or re-enrolls) a student's face for the check-in flow below — must run once
-   * per student before verifyFaceAttendance can ever match them. Calls python_service's
-   * /get-descriptor, which does the actual face_recognition encoding; this backend only
-   * stores the resulting 128-float vector.
+   * per student before verifyFaceAttendance can ever match them. FaceRecognitionService
+   * turns the photo into a 128-float descriptor, which is stored on the user.
    */
   async enrollFace(userId: number, imageBase64: string) {
     if (!imageBase64) {
       throw new BadRequestException('No image data provided');
     }
 
-    this.logger.debug(`enrollFace: userId=${userId} imageLen=${imageBase64.length} calling ${PYTHON_AI_SERVICE_URL}/get-descriptor`);
-
-    let result: { success: boolean; descriptor?: number[]; message?: string };
+    let descriptor: number[] | null;
     try {
-      const res = await fetch(`${PYTHON_AI_SERVICE_URL}/get-descriptor`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image_base64: imageBase64 }),
-      });
-      result = await res.json();
-      this.logger.debug(
-        `enrollFace: python_service responded success=${result.success} descriptorLen=${result.descriptor?.length ?? 0} message=${result.message ?? ''}`,
-      );
-    } catch (error) {
-      this.logger.error(`Face enrollment: python_service unreachable at ${PYTHON_AI_SERVICE_URL}: ${error.message}`);
-      throw new BadRequestException('Face recognition service is unavailable right now — please try again later.');
+      descriptor = await this.faces.descriptor(imageBase64);
+    } catch (error: any) {
+      if (error instanceof BadRequestException) throw error;
+      this.logger.error(`Face enrollment failed: ${error?.message}`);
+      throw new BadRequestException('Face recognition failed — please try again.');
+    }
+    if (!descriptor) {
+      throw new BadRequestException('No face detected in the photo — please try again.');
     }
 
-    if (!result.success || !result.descriptor) {
-      this.logger.warn(`enrollFace: no descriptor for userId=${userId} — ${result.message}`);
-      throw new BadRequestException(result.message || 'No face detected in the photo — please try again.');
-    }
-
-    const updated = await this.prisma.user.update({ where: { id: userId }, data: { faceDescriptor: result.descriptor } });
+    const updated = await this.prisma.user.update({ where: { id: userId }, data: { faceDescriptor: descriptor } });
     this.logger.debug(
       `enrollFace: saved faceDescriptor for userId=${userId} (${updated.name}) — stored length=${Array.isArray(updated.faceDescriptor) ? (updated.faceDescriptor as any[]).length : 'n/a'}`,
     );
@@ -150,14 +141,14 @@ export class AttendanceService {
    * Real face-recognition check-in. Previously this just marked whichever student
    * happened to be first in the batch's booking list "present" regardless of who (or
    * whether anyone) was actually in the photo — imageBase64 was received and discarded.
-   * Now it calls python_service's /recognize with ONLY this batch's enrolled descriptors
+   * Now it runs FaceRecognitionService.recognize with ONLY this batch's enrolled descriptors
    * (candidates below), so a face that belongs to a student enrolled in a *different*
    * batch/timing can never match here — e.g. capturing the morning Design batch will
    * never mark the evening Design batch's student present, even if their face was in an
    * earlier frame, because they're simply not in `candidates`.
    *
-   * A single camera frame can contain several students. python_service's /recognize
-   * returns one result per detected face, so when multiple faces in frame belong to
+   * A single camera frame can contain several students. recognize() returns one result
+   * per recognised face, so when multiple faces in frame belong to
    * students actually enrolled in this batch, every one of them must be marked present —
    * previously only the single highest-confidence match was recorded and the rest were
    * silently dropped.
@@ -189,21 +180,17 @@ export class AttendanceService {
       throw new BadRequestException('No students in this batch have enrolled their face yet — use the enrollment flow first.');
     }
 
-    let matches: { student_id: string; confidence: number }[];
+    let matches: FaceMatch[];
     try {
-      const res = await fetch(`${PYTHON_AI_SERVICE_URL}/recognize`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          image_base64: imageBase64,
-          known_faces: candidates.map((u) => ({ id: String(u.id), descriptor: u.faceDescriptor })),
-        }),
-      });
-      matches = await res.json();
-      this.logger.debug(`verifyFaceAttendance: python_service /recognize returned ${JSON.stringify(matches)}`);
-    } catch (error) {
-      this.logger.error(`Face verification: python_service unreachable at ${PYTHON_AI_SERVICE_URL}: ${error.message}`);
-      throw new BadRequestException('Face recognition service is unavailable right now — please try again later.');
+      matches = await this.faces.recognize(
+        imageBase64,
+        candidates.map((u) => ({ id: String(u.id), descriptor: u.faceDescriptor as number[] })),
+      );
+      this.logger.debug(`verifyFaceAttendance: recognize returned ${JSON.stringify(matches)}`);
+    } catch (error: any) {
+      if (error instanceof BadRequestException) throw error;
+      this.logger.error(`Face verification failed: ${error?.message}`);
+      throw new BadRequestException('Face recognition failed — please try again.');
     }
 
     if (!Array.isArray(matches) || matches.length === 0) {
