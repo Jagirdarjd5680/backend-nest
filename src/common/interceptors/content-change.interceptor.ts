@@ -79,7 +79,9 @@ export class ContentChangeInterceptor implements NestInterceptor {
 
 /** Fire-and-forget `INCR hot:gen:<group>` over raw RESP (no Redis client dependency). */
 function bumpHotCache(group: string) {
-  const host = process.env.REDIS_HOST || '127.0.0.1';
+  // The FastAPI hot cache (and Redis) is optional; skip entirely unless configured.
+  if (!process.env.REDIS_HOST) return;
+  const host = process.env.REDIS_HOST;
   const port = parseInt(process.env.REDIS_PORT || '6379', 10);
   const password = process.env.REDIS_PASSWORD;
   const cmd = (...args: string[]) => `*${args.length}\r\n${args.map((a) => `$${Buffer.byteLength(a)}\r\n${a}\r\n`).join('')}`;
