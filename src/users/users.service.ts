@@ -172,7 +172,7 @@ export class UsersService {
       const { enrolledCourses, batches, autoGeneratePassword, ...rest } = userData;
 
       // Sanitize empty string unique fields so the database does not trigger unique constraint errors on empty strings
-      for (const field of ['phone', 'googleId', 'rollNumber', 'referralCode']) {
+      for (const field of ['email', 'phone', 'googleId', 'rollNumber', 'referralCode']) {
         if (rest[field] === '' || rest[field] === null || rest[field] === undefined) {
           delete rest[field];
         }

@@ -24,7 +24,7 @@ export class PaymentsService {
    * a key entered in the admin panel would never take effect until the process restarted.
    * process.env stays as a fallback for deployments that prefer env-based config.
    */
-  private async getRazorpayCredentials(): Promise<{ keyId: string; keySecret: string } | null> {
+  async getRazorpayCredentials(): Promise<{ keyId: string; keySecret: string } | null> {
     try {
       const settingsRow = await this.prisma.settings.findUnique({ where: { key: 'payments' } });
       const paymentsSettings = settingsRow ? JSON.parse(settingsRow.value) : null;
@@ -84,7 +84,9 @@ export class PaymentsService {
         razorpayOrderId = order.id;
         console.log(`✅ [Payments] Real Razorpay order created orderId=${razorpayOrderId} courseId=${dto.courseId}`);
       } catch (err) {
-        console.error('❌ [Payments] Razorpay order creation failed, falling back to mock order ID:', err.message);
+        // A gateway is configured, so a mock order here would be a free enrollment.
+        console.error('❌ [Payments] Razorpay order creation failed:', err.message);
+        throw new BadRequestException('Could not create payment order, please try again');
       }
     }
 
@@ -172,58 +174,66 @@ export class PaymentsService {
   }
 
   async verifyPayment(userId: number, dto: VerifyPaymentDto) {
-    const credentials = await this.getRazorpayCredentials();
+    // The order must be one this user created via create-order — the course comes from
+    // that record, never from the request body, so a client can't swap in another course.
+    const payment = await this.prisma.payment.findFirst({
+      where: { razorpayOrderId: dto.razorpayOrderId, userId },
+    });
+    if (!payment || !payment.courseId) {
+      throw new BadRequestException('Payment order not found');
+    }
+    if (dto.courseId && dto.courseId !== payment.courseId) {
+      throw new BadRequestException('Order does not belong to this course');
+    }
+    const courseId = payment.courseId;
 
+    const credentials = await this.getRazorpayCredentials();
     const isMock = dto.razorpayOrderId.startsWith('order_mock_');
     let isSignatureValid = false;
 
     if (isMock) {
-      isSignatureValid = true;
+      // Mock orders skip Razorpay: allowed for free (₹0) orders, and for paid ones only
+      // in a non-production backend that has no gateway configured.
+      isSignatureValid =
+        payment.amount <= 0 || (!credentials && process.env.NODE_ENV !== 'production');
     } else if (credentials?.keySecret) {
       const generatedSignature = crypto
         .createHmac('sha256', credentials.keySecret)
         .update(`${dto.razorpayOrderId}|${dto.razorpayPaymentId}`)
         .digest('hex');
-
-      isSignatureValid = generatedSignature === dto.razorpaySignature;
-    } else {
-      isSignatureValid = true;
+      const a = Buffer.from(generatedSignature);
+      const b = Buffer.from(dto.razorpaySignature || '');
+      isSignatureValid = a.length === b.length && crypto.timingSafeEqual(a, b);
     }
 
     if (!isSignatureValid) {
-      await this.prisma.payment.updateMany({
-        where: { razorpayOrderId: dto.razorpayOrderId },
+      await this.prisma.payment.update({
+        where: { id: payment.id },
         data: { status: 'failed' },
       });
       throw new BadRequestException('Invalid payment signature verification failed');
     }
 
-    const payment = await this.prisma.payment.findFirst({
-      where: { razorpayOrderId: dto.razorpayOrderId },
+    await this.prisma.payment.update({
+      where: { id: payment.id },
+      data: {
+        status: 'completed',
+        razorpayPaymentId: dto.razorpayPaymentId,
+        razorpaySignature: dto.razorpaySignature,
+      },
     });
-
-    if (payment) {
-      await this.prisma.payment.update({
-        where: { id: payment.id },
-        data: {
-          status: 'completed',
-          razorpayPaymentId: dto.razorpayPaymentId,
-          razorpaySignature: dto.razorpaySignature,
-        },
-      });
-    }
 
     // Auto-enroll student into course
     await this.prisma.enrollment.upsert({
       where: {
         userId_courseId: {
           userId,
-          courseId: dto.courseId,
+          courseId,
         },
       },
       create: {
         userId,
-        courseId: dto.courseId,
+        courseId,
       },
       update: {},
     });
@@ -255,7 +265,7 @@ export class PaymentsService {
       success: true,
       message: 'Payment verified and course enrolled successfully',
       data: {
-        courseId: dto.courseId,
+        courseId,
         orderId: dto.razorpayOrderId,
         paymentId: dto.razorpayPaymentId,
       },

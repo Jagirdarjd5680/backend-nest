@@ -392,6 +392,9 @@ export class FeeRecordsService {
       this.logger.log(`SMTP not configured. Registration letter saved to ${filePath}`);
       return { success: true, message: `Registration letter PDF generated locally at ${fileName} (SMTP credentials missing for email dispatch).` };
     }
+    if (!user?.email) {
+      return { success: false, message: 'Student has no email on file' };
+    }
 
     try {
       const nodemailer = require('nodemailer');

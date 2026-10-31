@@ -16,8 +16,8 @@ model Exam {
   createdBy     Int?
   createdByUser User? @relation("ExamCreatorRelation", fields: [createdBy], references: [id], onDelete: SetNull)
 
-  questions Question[]
-  results   ExamResult[]
+  questionLinks ExamQuestion[]
+  results       ExamResult[]
   unlocks   ExamUnlock[]
 
   @@map("exams")
@@ -84,10 +84,25 @@ model Question {
   courseId      Int?
   createdAt     DateTime @default(now())
 
+  // Legacy single-exam pointer — no longer a relation. Exam membership lives in ExamQuestion
+  // so one bank question can sit in many exams (saving exam B used to steal it from exam A).
   examId Int?
-  exam   Exam? @relation(fields: [examId], references: [id], onDelete: SetNull)
+
+  examLinks ExamQuestion[]
 
   @@map("questions")
+}
+
+model ExamQuestion {
+  examId     Int
+  exam       Exam     @relation(fields: [examId], references: [id], onDelete: Cascade)
+  questionId Int
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+
+  @@id([examId, questionId])
+  @@index([questionId])
+  @@map("exam_questions")
 }
 
 model Assignment {

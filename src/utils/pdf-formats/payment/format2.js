@@ -58,7 +58,7 @@ export const generateFormat2 = async (doc, { user, payment, course, record, allP
     doc.fillColor('#000').fontSize(10).font('Helvetica-Bold').text('Bill To', 40, infoY);
     doc.font('Helvetica').fontSize(9);
     doc.text(`Student Name: ${user.name}`, 40, infoY + 15);
-    doc.text(`Email: ${user.email}`, 40, infoY + 27);
+    doc.text(`Email: ${user.email || '-'}`, 40, infoY + 27);
     doc.text(`Roll No: ${user.rollNumber || '---'}`, 40, infoY + 39);
     doc.text(`Contact: ${user.phone || '---'}`, 40, infoY + 51);
 

@@ -2,12 +2,27 @@ import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import { Controller, Get, Post, Patch, Delete, Param, Body, UseGuards, Request } from '@nestjs/common';
 import { CreditTransactionsService } from './credit-transactions.service';
+import { CreditPurchaseService } from './credit-purchase.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
 @Controller('credits')
 @UseGuards(JwtAuthGuard)
 export class CreditTransactionsController {
-  constructor(private service: CreditTransactionsService) {}
+  constructor(
+    private service: CreditTransactionsService,
+    private purchase: CreditPurchaseService,
+  ) {}
+
+  // Student buys a support-credit plan through Razorpay (mobile SupportCreditScreen).
+  @Post('create-order')
+  async createOrder(@Request() req: any, @Body('planId') planId: string) {
+    return this.purchase.createOrder(req.user.id, planId);
+  }
+
+  @Post('verify-payment')
+  async verifyPayment(@Request() req: any, @Body() body: any) {
+    return this.purchase.verifyPayment(req.user.id, body);
+  }
 
   @Get('history')
   async findHistoryOwn(@Request() req: any) {

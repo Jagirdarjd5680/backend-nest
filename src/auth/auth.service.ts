@@ -124,6 +124,11 @@ export class AuthService {
 
   /** Self-service 2FA toggle for the student Settings page — no admin endpoint covers this today. */
   async setTwoFactorEnabled(userId: number, enabled: boolean) {
+    // 2FA codes go out by email — a phone/OTP account (email NULL) would lock itself out.
+    if (enabled) {
+      const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { email: true } });
+      if (!user?.email) throw new BadRequestException('Add an email address to your profile before enabling 2FA');
+    }
     await this.prisma.user.update({ where: { id: userId }, data: { twoFactorEnabled: enabled } });
     return { success: true, twoFactorEnabled: enabled };
   }
@@ -340,7 +345,9 @@ export class AuthService {
     if (!user) {
       user = await this.usersService.create({
         name: `User_${phone.slice(-4)}`,
-        email: `${phone}@otp.local`,
+        // Phone-only signup has no email — keep it NULL (column is nullable; Postgres allows
+        // many NULLs under @unique) instead of a fake `<phone>@otp.local` address.
+        email: null,
         // usersService.create() hashes whatever password it's given — passing a
         // pre-hashed value here used to hash it a second time (real, synchronous
         // CPU work) for no reason, since OTP accounts never log in with a password.

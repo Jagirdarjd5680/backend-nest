@@ -2,6 +2,27 @@ import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/commo
 import { PrismaService } from '../prisma/prisma.service';
 import { CourseProgressService } from '../course-progress/course-progress.service';
 
+// Exam ↔ Question is many-to-many through ExamQuestion. Include the links and flatten them
+// back to `exam.questions` so every API consumer (web, mobile, results) keeps its old shape.
+const WITH_QUESTIONS = {
+  questionLinks: { include: { question: true }, orderBy: { createdAt: 'asc' as const } },
+};
+
+const flattenQuestions = <T extends { questionLinks?: { question: any }[] }>(exam: T) => {
+  const { questionLinks, ...rest } = exam;
+  return {
+    ...rest,
+    questions: (questionLinks || []).map((l) => l.question).filter((q) => q && !q.isDeleted),
+  };
+};
+
+// Students get the questions without the answer key; grading happens server-side on submit.
+const canSeeAnswers = (role?: string) => role === 'admin' || role === 'teacher';
+const hideAnswers = <T extends { questions: any[] }>(exam: T): T => ({
+  ...exam,
+  questions: exam.questions.map(({ correctOption, explanation, ...q }) => q),
+});
+
 @Injectable()
 export class ExamsService {
   constructor(
@@ -30,6 +51,7 @@ export class ExamsService {
       const allCourseIds = [...new Set([...enrolledCourseIds, ...batchCourseIds])];
 
       whereClause = {
+        isPublished: true,
         OR: [
           { courseId: { in: allCourseIds } },
           { courseId: null },
@@ -41,13 +63,15 @@ export class ExamsService {
       whereClause.courseId = courseFilterId;
     }
 
-    const exams = await this.prisma.exam.findMany({
-      where: whereClause,
-      include: {
-        questions: true,
-      },
-      orderBy: { createdAt: 'desc' },
-    });
+    const exams = (
+      await this.prisma.exam.findMany({
+        where: whereClause,
+        include: WITH_QUESTIONS,
+        orderBy: { createdAt: 'desc' },
+      })
+    )
+      .map(flattenQuestions)
+      .map((e) => (canSeeAnswers(role) ? e : hideAnswers(e)));
 
     let unlocks: any[] = [];
     let studentResults: any[] = [];
@@ -86,13 +110,13 @@ export class ExamsService {
   }
 
   async findOneExam(id: number, userId?: number, role?: string) {
-    const exam = await this.prisma.exam.findUnique({
+    const row = await this.prisma.exam.findUnique({
       where: { id },
-      include: {
-        questions: true,
-      },
+      include: WITH_QUESTIONS,
     });
-    if (!exam) throw new NotFoundException(`Exam with ID ${id} not found`);
+    if (!row) throw new NotFoundException(`Exam with ID ${id} not found`);
+    const flat = flattenQuestions(row);
+    const exam = canSeeAnswers(role) ? flat : hideAnswers(flat);
 
     if (role === 'student' && userId && exam.courseId) {
       const enrollment = await this.prisma.enrollment.findFirst({
@@ -166,11 +190,42 @@ export class ExamsService {
     };
   }
 
+  // Replaces this exam's question set: unticked links are removed, new ones added. Other
+  // exams' links to the same questions are untouched.
+  async setExamQuestions(id: number, userId: number, role: string, questionIds: any[]) {
+    const exam = await this.prisma.exam.findUnique({ where: { id } });
+    if (!exam) throw new NotFoundException(`Exam with ID ${id} not found`);
+
+    if (role !== 'admin' && exam.createdBy !== userId) {
+      throw new ForbiddenException('Not authorized to update this exam');
+    }
+
+    const ids = (Array.isArray(questionIds) ? questionIds : [])
+      .map((q) => parseInt(q, 10))
+      .filter((n) => Number.isInteger(n));
+
+    const existing = await this.prisma.question.findMany({ where: { id: { in: ids } }, select: { id: true } });
+    const validIds = existing.map((q) => q.id);
+
+    await this.prisma.$transaction([
+      this.prisma.examQuestion.deleteMany({
+        where: { examId: id, questionId: { notIn: validIds } },
+      }),
+      this.prisma.examQuestion.createMany({
+        data: validIds.map((questionId) => ({ examId: id, questionId })),
+        skipDuplicates: true,
+      }),
+    ]);
+
+    return { success: true, data: { examId: id, questionIds: validIds } };
+  }
+
   async submitExam(studentId: number, dto: { examId: number; answers: { questionId: number; answer: string }[] }) {
-    const exam = await this.prisma.exam.findUnique({
+    const row = await this.prisma.exam.findUnique({
       where: { id: dto.examId },
-      include: { questions: true },
+      include: WITH_QUESTIONS,
     });
+    const exam = row ? flattenQuestions(row) : null;
     if (!exam) throw new NotFoundException(`Exam with ID ${dto.examId} not found`);
 
     let totalScore = 0;
@@ -303,8 +358,8 @@ export class ExamsService {
         correctOption: data.correctOption,
         marks: data.marks ? parseFloat(data.marks) : 1,
         explanation: data.explanation || '',
-        examId: data.examId ? parseInt(data.examId, 10) : undefined,
         courseId: data.courseId ? parseInt(data.courseId, 10) : undefined,
+        ...(data.examId ? { examLinks: { create: { examId: parseInt(data.examId, 10) } } } : {}),
       },
     });
     return {

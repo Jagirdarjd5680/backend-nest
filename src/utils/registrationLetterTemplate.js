@@ -111,7 +111,7 @@ const generateRegistrationLetterHtml = (student, feeRecord, siteSettings) => {
             </tr>
             <tr>
                 <td><b>Username / Password</b></td>
-                <td>${student.email} / ${student.plainPassword || '******'}</td>
+                <td>${student.email || '-'} /${student.plainPassword || '******'}</td>
             </tr>
         </table>
 

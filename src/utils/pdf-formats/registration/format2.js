@@ -34,7 +34,7 @@ export const generateFormat2 = async (doc, { user, feeRecord, settings, pdfNumbe
     doc.fontSize(14).text(user.name.toUpperCase(), 40, 185);
     doc.fontSize(10).font('Helvetica').fillColor('#444').text(user.studentProfile?.address || user.address || 'Address Not Provided');
     doc.text(`Phone: ${user.phone || 'N/A'}`);
-    doc.text(`Email: ${user.email}`);
+    doc.text(`Email: ${user.email || '-'}`);
 
     doc.moveDown(2);
     doc.fillColor(primaryColor).fontSize(14).font('Helvetica-Bold').text('Subject: Confirmation of Admission and Batch Assignment', { underline: true });

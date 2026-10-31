@@ -49,6 +49,15 @@ export class ExamsController {
     return { success: true, data: result };
   }
 
+  // "Manage Exam Questions" modal — replaces the exam's question set. Ahead of ':id' like progress.
+  @UseGuards(RolesGuard, ModulePermissionsGuard)
+  @Roles('admin', 'teacher')
+  @RequireModulePermission('exams', 'edit')
+  @Put(':id/questions')
+  async setQuestions(@Param('id') id: string, @Request() req: any, @Body('questionIds') questionIds: any[]) {
+    return this.service.setExamQuestions(parseInt(id, 10), req.user.id, req.user.role, questionIds);
+  }
+
   @Get(':id')
   async findOne(@Param('id') id: string, @Request() req: any) {
     return this.service.findOneExam(parseInt(id, 10), req.user?.id, req.user?.role);

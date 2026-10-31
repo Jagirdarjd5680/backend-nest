@@ -32,6 +32,7 @@ export class EventBookingsService {
   }
 
   private async sendTicketEmail(email: string, name: string, event: { title: string; date: Date }, ticketCode: string) {
+    if (!email) return; // phone/OTP accounts have no email on file
     try {
       const settingsRow = await this.prisma.settings.findUnique({ where: { key: 'smtp' } });
       const smtp = settingsRow ? JSON.parse(settingsRow.value) : null;
@@ -103,7 +104,9 @@ export class EventBookingsService {
         razorpayOrderId = order.id;
         console.log(`✅ [EventBooking] Razorpay order created orderId=${razorpayOrderId} eventId=${eventId}`);
       } catch (err: any) {
-        console.error('❌ [EventBooking] Razorpay order creation failed, falling back to mock order:', err.message);
+        // A gateway is configured, so a mock order here would be a free ticket.
+        console.error('❌ [EventBooking] Razorpay order creation failed:', err.message);
+        throw new BadRequestException('Could not create payment order, please try again');
       }
     }
 
@@ -136,19 +139,20 @@ export class EventBookingsService {
     if (!booking) throw new NotFoundException('Pending booking not found for this payment');
 
     const isMock = dto.razorpayOrderId.startsWith('order_mock_');
-    let isSignatureValid = isMock;
+    const credentials = await this.getRazorpayCredentials();
+    let isSignatureValid = false;
 
-    if (!isMock) {
-      const credentials = await this.getRazorpayCredentials();
-      if (credentials?.keySecret) {
-        const generatedSignature = crypto
-          .createHmac('sha256', credentials.keySecret)
-          .update(`${dto.razorpayOrderId}|${dto.razorpayPaymentId}`)
-          .digest('hex');
-        isSignatureValid = generatedSignature === dto.razorpaySignature;
-      } else {
-        isSignatureValid = true;
-      }
+    if (isMock) {
+      // Mock orders only exist for dev backends without a gateway configured.
+      isSignatureValid = !credentials && process.env.NODE_ENV !== 'production';
+    } else if (credentials?.keySecret) {
+      const generatedSignature = crypto
+        .createHmac('sha256', credentials.keySecret)
+        .update(`${dto.razorpayOrderId}|${dto.razorpayPaymentId}`)
+        .digest('hex');
+      const a = Buffer.from(generatedSignature);
+      const b = Buffer.from(dto.razorpaySignature || '');
+      isSignatureValid = a.length === b.length && crypto.timingSafeEqual(a, b);
     }
 
     if (!isSignatureValid) {

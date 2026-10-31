@@ -10,6 +10,9 @@ export const sendEmail = async (options: {
   html?: string;
   attachments?: any[];
 }) => {
+  // Phone/OTP accounts have no email on file.
+  if (!options.email) return false;
+
   try {
     const settingsList = await prisma.settings.findMany();
     const smtpHost = settingsList.find(s => s.key === 'smtp_host')?.value;

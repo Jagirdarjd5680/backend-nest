@@ -49,14 +49,14 @@ export class ExamResultsService {
       where: { id },
       include: {
         student: true,
-        exam: { include: { questions: true } },
+        exam: { include: { questionLinks: { include: { question: true } } } },
       },
     });
     if (!result) throw new NotFoundException(`ExamResults with ID ${id} not found`);
 
     const rawAnswers: any[] = Array.isArray(result.answers) ? (result.answers as any[]) : [];
     const answers = rawAnswers.map((ans) => {
-      const question = result.exam?.questions.find((q) => q.id === ans.questionId);
+      const question = result.exam?.questionLinks.find((l) => l.questionId === ans.questionId)?.question;
       const isCorrect = question ? question.correctOption.trim().toLowerCase() === (ans.answer || '').trim().toLowerCase() : false;
       return {
         questionText: question?.text || `Question #${ans.questionId}`,
