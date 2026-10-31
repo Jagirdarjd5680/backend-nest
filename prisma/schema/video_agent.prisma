@@ -1,0 +1,50 @@
+// Windows Local Video Processing Agent (local_agent/). The agent transcodes on the admin's PC
+// and uploads encrypted HLS straight to R2; this server only pairs it, hands out keys and
+// presigned URLs, and records job state. See src/video-agent/.
+
+model VideoAgent {
+  id          String    @id @default(uuid())
+  name        String
+  /// sha256 of the device token — the token itself is only ever shown to the agent once.
+  tokenHash   String    @unique
+  encoder     String?
+  version     String?
+  lastSeenAt  DateTime?
+  revokedAt   DateTime?
+  createdById String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  jobs VideoJob[]
+
+  @@map("video_agents")
+}
+
+model VideoJob {
+  id            String     @id @default(uuid())
+  agentId       String
+  agent         VideoAgent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  mediaId       String
+  videoId       String     @unique
+  fileName      String
+  fileSize      BigInt     @default(0)
+  /// Secret the browser must present to the agent's localhost server to hand over this file.
+  uploadSecret  String
+  /// queued → receiving → transcoding → uploading → verifying → completed | failed | cancelled
+  status        String     @default("queued")
+  progress      Int        @default(0)
+  attempts      Int        @default(0)
+  encoder       String?
+  rungs         String?
+  segmentCount  Int?
+  uploadedBytes BigInt     @default(0)
+  error         String?
+  createdById   String?
+  startedAt     DateTime?
+  completedAt   DateTime?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  @@index([agentId, status])
+  @@map("video_jobs")
+}

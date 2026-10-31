@@ -78,6 +78,19 @@ export class SeatBookingAdminController {
     return { success: true, data };
   }
 
+  /**
+   * Logged-in students (mobile app): who is booking comes from the token, never the body, and
+   * the per-IP limit is skipped — the one-request-per-zone-per-student rule still applies.
+   */
+  @UseGuards(JwtAuthGuard)
+  @Post('request/me')
+  async createMyRequest(@Body() body: any, @Req() req: any) {
+    const u = req.user || {};
+    const user = { id: u.id, name: u.name, email: u.email || undefined, phone: u.phone || undefined };
+    const data = await this.service.createRequest({ ...body, user }, getIp(req), true);
+    return { success: true, data };
+  }
+
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin')
   @Put(':id/status')

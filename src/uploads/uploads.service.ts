@@ -2,6 +2,7 @@ import { Injectable, BadRequestException, NotFoundException, ForbiddenException,
 import { PrismaService } from '../prisma/prisma.service';
 import { MediaService } from '../media/media.service';
 import { R2Service } from '../r2/r2.service'; // [r2]
+import { VideoAgentService } from '../video-agent/video-agent.service';
 import { UploadChunkDto } from './dto/upload-chunk.dto';
 import { QueryUploadsDto } from './dto/query-uploads.dto';
 import { BulkDeleteDto } from './dto/bulk-delete.dto';
@@ -16,6 +17,7 @@ export class UploadsService {
     private readonly prisma: PrismaService,
     private readonly mediaService: MediaService,
     @Optional() private readonly r2?: R2Service, // [r2]
+    @Optional() private readonly videoAgent?: VideoAgentService,
   ) {
     if (!fs.existsSync(this.uploadsDir)) {
       fs.mkdirSync(this.uploadsDir, { recursive: true });
@@ -38,7 +40,14 @@ export class UploadsService {
       .then(async (res) => {
         await this.prisma.media.updateMany({
           where: { videoId },
-          data: { url: res.streamUrl, thumbnailUrl: res.thumbnailUrl, status: 'ready', format: 'm3u8', processingProgress: 100 },
+          data: {
+            url: res.streamUrl,
+            thumbnailUrl: res.thumbnailUrl,
+            status: 'ready',
+            format: 'm3u8',
+            processingProgress: 100,
+            ...(res.durationSec > 0 ? { duration: res.durationSec } : {}),
+          },
         });
         // [r2] move the encrypted chunks to the bucket (playlists + keys stay here)
         this.r2
@@ -372,7 +381,8 @@ export class UploadsService {
         return { ...m, status: 'ready', url: finalUrl, fileUrl: finalUrl, processingProgress: 100,
           thumbnailUrl: m.thumbnailUrl || `/uploads/thumbnails/${m.videoId}.jpg`, size: m.size ? m.size.toString() : '0' };
       }
-      const liveProgress = m.status === 'processing' && m.videoId ? this.mediaService.getHlsProgress(m.videoId) : 0;
+      // Local-agent jobs (jobId set) report progress into the row; only VPS conversions are live in memory.
+      const liveProgress = m.status === 'processing' && m.videoId && !m.jobId ? this.mediaService.getHlsProgress(m.videoId) : 0;
       const progress = liveProgress > 0 ? liveProgress : (m.processingProgress || 0);
 
       return {
@@ -455,6 +465,7 @@ export class UploadsService {
         } catch (e) {}
       }
       if (file.videoId) {
+        await this.videoAgent?.cancelForVideo(file.videoId); // stop a local-agent job still running
         this.mediaService.deleteHlsKey(file.videoId);
         this.r2?.deleteHlsSegments(file.videoId); // [r2]
         const hlsFolder = path.join(process.cwd(), 'uploads', 'hls', file.videoId);
@@ -512,6 +523,7 @@ export class UploadsService {
     }
 
     if (media.videoId) {
+      await this.videoAgent?.cancelForVideo(media.videoId); // stop a local-agent job still running
       this.mediaService.deleteHlsKey(media.videoId);
       this.r2?.deleteHlsSegments(media.videoId); // [r2]
       const hlsFolder = path.join(process.cwd(), 'uploads', 'hls', media.videoId);

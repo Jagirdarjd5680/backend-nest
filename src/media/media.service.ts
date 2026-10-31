@@ -310,7 +310,7 @@ export class MediaService {
     inputFilePath: string,
     videoId: string,
     onProgress?: (percent: number) => void
-  ): Promise<{ streamUrl: string; thumbnailUrl: string }> {
+  ): Promise<{ streamUrl: string; thumbnailUrl: string; durationSec: number }> {
     const waiting = this.hlsQueueLength++;
     if (waiting > 0) console.log(`⏳ [HLS Queue] ${videoId} queued — ${waiting} conversion(s) ahead`);
     const run = () => {
@@ -335,7 +335,7 @@ export class MediaService {
     inputFilePath: string,
     videoId: string,
     onProgress?: (percent: number) => void
-  ): Promise<{ streamUrl: string; thumbnailUrl: string }> {
+  ): Promise<{ streamUrl: string; thumbnailUrl: string; durationSec: number }> {
     const outputDir = path.join(this.hlsBase, videoId);
     if (!fs.existsSync(outputDir)) {
       fs.mkdirSync(outputDir, { recursive: true });
@@ -490,6 +490,7 @@ export class MediaService {
           resolve({
             streamUrl: `/api/media/stream/${videoId}/master.m3u8`,
             thumbnailUrl,
+            durationSec: totalDurationSec,
           });
         })
         .on('error', (err: any) => {

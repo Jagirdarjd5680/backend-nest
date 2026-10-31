@@ -66,18 +66,23 @@ export class HlsSecurityService {
 
   /** Creates (or reuses) the video's key and returns the paths ffmpeg needs. */
   ensureKey(videoId: string): { keyPath: string; keyInfoPath: string; key: Buffer } {
-    const keyPath = this.keyPath(videoId);
-    if (!keyPath) throw new Error(`Invalid videoId for HLS key: ${videoId}`);
-    fs.mkdirSync(this.keysDir, { recursive: true });
-    if (!fs.existsSync(keyPath)) {
-      fs.writeFileSync(keyPath, crypto.randomBytes(16), { mode: 0o600 });
-    }
+    const key = this.ensureKeyBytes(videoId);
+    const keyPath = this.keyPath(videoId) as string;
     // ffmpeg key-info: line 1 = URI written into the playlist (a placeholder we rewrite per
     // request), line 2 = key file. No IV line → the segment sequence number is the IV, which is
     // what players assume when EXT-X-KEY has no IV attribute.
     const keyInfoPath = path.join(this.keysDir, `${videoId}.keyinfo`);
     fs.writeFileSync(keyInfoPath, `key://${videoId}\n${keyPath}\n`);
-    return { keyPath, keyInfoPath, key: fs.readFileSync(keyPath) };
+    return { keyPath, keyInfoPath, key };
+  }
+
+  /** Creates (or reuses) the video's key without a keyinfo file — for the local agent, which writes its own. */
+  ensureKeyBytes(videoId: string): Buffer {
+    const keyPath = this.keyPath(videoId);
+    if (!keyPath) throw new Error(`Invalid videoId for HLS key: ${videoId}`);
+    fs.mkdirSync(this.keysDir, { recursive: true });
+    if (!fs.existsSync(keyPath)) fs.writeFileSync(keyPath, crypto.randomBytes(16), { mode: 0o600 });
+    return fs.readFileSync(keyPath);
   }
 
   readKey(videoId: string): Buffer {

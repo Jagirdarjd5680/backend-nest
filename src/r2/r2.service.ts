@@ -5,7 +5,7 @@ import * as http from 'http';
 import * as https from 'https';
 import { Readable } from 'stream';
 import { PrismaService } from '../prisma/prisma.service';
-import { encodeKeyPath, signHeaders, SigV4Credentials } from './r2.sigv4';
+import { encodeKeyPath, presignUrl, signHeaders, SigV4Credentials } from './r2.sigv4';
 
 /**
  * Cloudflare R2 (S3 API) offload for the Media Library.
@@ -312,6 +312,55 @@ export class R2Service {
     const config = await this.getConfig();
     if (!config.publicBaseUrl || !this.hlsInBucket(videoId, hlsBaseDir)) return null;
     return `${config.publicBaseUrl}/${HLS_PREFIX.replace(/\/$/, '')}`;
+  }
+
+  // ─── Local video agent (src/video-agent/) ────────────────────────────────
+
+  /** True when the bucket is configured well enough for the local agent to upload into it. */
+  async canAcceptAgentUploads() {
+    const config = await this.getConfig();
+    return config.enabled && this.hasCredentials(config);
+  }
+
+  /**
+   * Presigned PUT URLs for chunks under hls/<videoId>/ (paths like "720p/enc_00001.ts"). The
+   * agent uploads straight to Cloudflare with them — video bytes never pass through this server.
+   */
+  async presignHlsPuts(videoId: string, relPaths: string[], expiresSeconds = 3600) {
+    const config = await this.getConfig();
+    if (!this.hasCredentials(config)) throw new Error('R2 is not configured');
+    const out: Record<string, string> = {};
+    for (const rel of relPaths) {
+      out[rel] = presignUrl({
+        creds: this.creds(config),
+        url: this.objectUrl(config, `${HLS_PREFIX}${videoId}/${rel}`),
+        expiresSeconds,
+        method: 'PUT',
+      });
+    }
+    return out;
+  }
+
+  /** Every chunk of a video in the bucket with its size, keyed by path under hls/<videoId>/. */
+  async listHlsObjects(videoId: string): Promise<Map<string, number>> {
+    const config = await this.getConfig();
+    if (!this.hasCredentials(config)) throw new Error('R2 is not configured');
+    const prefix = `${HLS_PREFIX}${videoId}/`;
+    const items = new Map<string, number>();
+    let token: string | undefined;
+    do {
+      const u = new URL(`${config.endpoint}/${encodeKeyPath(config.bucket)}`);
+      u.searchParams.set('list-type', '2');
+      u.searchParams.set('prefix', prefix);
+      if (token) u.searchParams.set('continuation-token', token);
+      const xml = (await this.request(config, 'GET', u)).body.toString();
+      for (const m of xml.matchAll(/<Contents>([\s\S]*?)<\/Contents>/g)) {
+        const key = (/<Key>([^<]+)<\/Key>/.exec(m[1])?.[1] || '').replace(/&amp;/g, '&');
+        items.set(key.slice(prefix.length), Number(/<Size>(\d+)<\/Size>/.exec(m[1])?.[1] || 0));
+      }
+      token = /<IsTruncated>true<\/IsTruncated>/.test(xml) ? /<NextContinuationToken>([^<]+)</.exec(xml)?.[1] : undefined;
+    } while (token);
+    return items;
   }
 
   /** How many encrypted chunks of a video are in the bucket (dev test page progress). */

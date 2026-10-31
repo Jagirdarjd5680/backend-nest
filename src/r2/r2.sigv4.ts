@@ -85,9 +85,10 @@ export function signHeaders(opts: {
   };
 }
 
-/** Builds a presigned GET URL valid for `expiresSeconds` from `now`. */
-export function presignUrl(opts: { creds: SigV4Credentials; url: URL; expiresSeconds: number; now?: Date }): string {
+/** Builds a presigned URL (GET unless `method` says otherwise) valid for `expiresSeconds` from `now`. */
+export function presignUrl(opts: { creds: SigV4Credentials; url: URL; expiresSeconds: number; now?: Date; method?: string }): string {
   const { creds, url } = opts;
+  const method = opts.method || 'GET';
   const amzDate = toAmzDate(opts.now || new Date());
   const dateStamp = amzDate.slice(0, 8);
   const scope = `${dateStamp}/${creds.region}/s3/aws4_request`;
@@ -100,7 +101,7 @@ export function presignUrl(opts: { creds: SigV4Credentials; url: URL; expiresSec
     'X-Amz-SignedHeaders': 'host',
   };
   const qs = canonicalQuery(query);
-  const canonicalRequest = ['GET', url.pathname, qs, `host:${url.host}\n`, 'host', UNSIGNED_PAYLOAD].join('\n');
+  const canonicalRequest = [method, url.pathname, qs, `host:${url.host}\n`, 'host', UNSIGNED_PAYLOAD].join('\n');
   const stringToSign = ['AWS4-HMAC-SHA256', amzDate, scope, sha256Hex(canonicalRequest)].join('\n');
   const signature = crypto.createHmac('sha256', signingKey(creds.secretAccessKey, dateStamp, creds.region)).update(stringToSign).digest('hex');
 

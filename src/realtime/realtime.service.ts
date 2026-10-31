@@ -42,6 +42,14 @@ export class RealtimeService {
     });
   }
 
+  /**
+   * A named event outside `realtime_update` — for high-frequency updates (video job progress)
+   * that a page listens for directly, and that must not turn into AuthContext toasts.
+   */
+  emitEvent(room: string, event: string, data: Record<string, any> = {}) {
+    this.chatGateway.server?.to(room).emit(event, data);
+  }
+
   /** Broadcast to everyone currently connected — use sparingly (e.g. site-wide banner). */
   emitToAll(type: string, data: Record<string, any> = {}) {
     if (!this.chatGateway.server) return;

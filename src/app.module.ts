@@ -60,6 +60,7 @@ import { BackupModule } from './backup/backup.module';
 import { GamificationModule } from './gamification/gamification.module';
 import { UploadsModule } from './uploads/uploads.module';
 import { R2Module } from './r2/r2.module'; // [r2]
+import { VideoAgentModule } from './video-agent/video-agent.module';
 import { GoogleReviewsModule } from './google-reviews/google-reviews.module';
 import { VideoReviewsModule } from './video-reviews/video-reviews.module';
 
@@ -124,6 +125,7 @@ import { VideoReviewsModule } from './video-reviews/video-reviews.module';
     GamificationModule,
     UploadsModule,
     R2Module, // [r2]
+    VideoAgentModule,
     GoogleReviewsModule,
     VideoReviewsModule,
   ],
