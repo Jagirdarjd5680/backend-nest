@@ -62,9 +62,17 @@ export class AttendanceService {
     };
   }
 
-  async findByBatch(batchId: number) {
+  /** Midnight (server time) — the exact `date` every attendance row for "today" is stored with. */
+  private today() {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }
+
+  /** `onlyToday` limits to today's rows; without it every day of the batch is returned. */
+  async findByBatch(batchId: number, onlyToday = false) {
     const attendance = await this.prisma.attendance.findMany({
-      where: { batchId },
+      where: onlyToday ? { batchId, date: this.today() } : { batchId },
       include: {
         student: {
           select: { id: true, name: true, email: true, phone: true, avatar: true },
@@ -83,6 +91,21 @@ export class AttendanceService {
       success: true,
       data: formatted,
     };
+  }
+
+  /**
+   * Manual present/absent for today (staff tapping a student). Upserts on the same
+   * (student, batch, today) key face check-in uses, so the two never create duplicates
+   * and the client never has to agree with the server on what "today" is.
+   */
+  async markManual(batchId: number, studentId: number, status: 'present' | 'absent') {
+    const date = this.today();
+    const row = await this.prisma.attendance.upsert({
+      where: { studentId_batchId_date: { studentId, batchId, date } },
+      create: { batchId, studentId, date, status },
+      update: { status },
+    });
+    return { success: true, data: { ...row, _id: row.id.toString() } };
   }
 
   async create(data: any) {
@@ -127,6 +150,7 @@ export class AttendanceService {
       throw new BadRequestException('Face recognition failed — please try again.');
     }
     if (!descriptor) {
+      this.logger.warn(`enrollFace: no face found for userId=${userId} (imageLen=${imageBase64.length})`);
       throw new BadRequestException('No face detected in the photo — please try again.');
     }
 
@@ -158,19 +182,22 @@ export class AttendanceService {
       throw new BadRequestException('No image data provided');
     }
 
-    const batch = await this.prisma.batch.findUnique({
-      where: { id: batchId },
-      include: {
-        bookingBatches: { include: { user: true } },
-      },
-    });
+    const batch = await this.prisma.batch.findUnique({ where: { id: batchId }, select: { id: true } });
     if (!batch) {
       throw new NotFoundException('Batch not found');
     }
 
-    const candidates = batch.bookingBatches
-      .map((b) => b.user)
-      .filter((u): u is NonNullable<typeof u> => Boolean(u?.faceDescriptor));
+    // Same membership rule as BatchesService.memberWhere (the batch's student list):
+    // booked into the batch OR already has attendance in it. Using only bookingBatches
+    // here meant a student shown on the batch page could never be recognized at check-in.
+    const members = await this.prisma.user.findMany({
+      where: {
+        role: 'student',
+        isDeleted: false,
+        OR: [{ bookingBatches: { some: { batchId } } }, { attendances: { some: { batchId } } }],
+      },
+    });
+    const candidates = members.filter((u) => Array.isArray(u.faceDescriptor) && (u.faceDescriptor as any[]).length === 128);
 
     this.logger.debug(
       `verifyFaceAttendance: batchId=${batchId} enrolledCandidates=${candidates.length} [${candidates.map((c) => `${c.id}:${c.name}`).join(', ')}]`,
@@ -226,14 +253,14 @@ export class AttendanceService {
       });
       const alreadyMarked = Boolean(existing && existing.status === 'present');
 
-      const attendance = existing
-        ? existing
-        : await this.prisma.attendance.create({
+      // An existing absent/late row is flipped to present — return the updated row, not the stale one.
+      const attendance = !existing
+        ? await this.prisma.attendance.create({
             data: { batchId, studentId: matchedStudent.id, status: 'present', date: today },
-          });
-      if (existing && existing.status !== 'present') {
-        await this.prisma.attendance.update({ where: { id: existing.id }, data: { status: 'present' } });
-      }
+          })
+        : existing.status !== 'present'
+          ? await this.prisma.attendance.update({ where: { id: existing.id }, data: { status: 'present' } })
+          : existing;
 
       this.logger.debug(
         `verifyFaceAttendance: studentId=${matchedStudent.id} (${matchedStudent.name}) confidence=${match.confidence} alreadyMarked=${alreadyMarked} attendanceId=${attendance.id}`,

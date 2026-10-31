@@ -169,6 +169,17 @@ export class SettingsService {
     };
   }
 
+  /**
+   * Internal use (FcmService) — the raw service-account JSON pasted/uploaded in
+   * Settings > Integrations > Firebase Push Notifications, or '' when not set.
+   */
+  async getFirebaseServiceAccountJson(): Promise<string> {
+    const all = await this._buildSettingsObject();
+    const value = all.integrations?.firebaseServiceAccount;
+    if (!value) return '';
+    return typeof value === 'string' ? value : JSON.stringify(value);
+  }
+
   // PUT /settings — update a single key-value setting
   async upsertSetting(key: string, value: any) {
     const valueStr = typeof value === 'string' ? value : JSON.stringify(value);

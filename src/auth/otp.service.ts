@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { TemporaryBlockException } from '../common/exceptions/temporary-block.exception';
+import { getSmtpConfig } from '../utils/smtp-config';
 
 const SEND_LIMIT = 3; // this many sends allowed inside the window; the next one is blocked
 const SEND_WINDOW_MS = 60_000;
@@ -72,20 +73,22 @@ export class OtpService {
   }
 
   async sendEmailOtp(email: string, otp: string): Promise<void> {
-    const host = process.env.SMTP_HOST;
-    const user = process.env.SMTP_USER;
-    const pass = process.env.SMTP_PASS;
-
-    if (!host || !user || !pass) {
+    const smtp = await getSmtpConfig(this.prisma);
+    if (!smtp) {
       console.log(`[OtpService] SMTP not configured. Verification code for ${email}: ${otp}`);
       return;
     }
 
     try {
       const nodemailer = require('nodemailer');
-      const transporter = nodemailer.createTransport({ host, port: 587, auth: { user, pass } });
+      const transporter = nodemailer.createTransport({
+        host: smtp.host,
+        port: smtp.port,
+        secure: smtp.port === 465,
+        auth: { user: smtp.user, pass: smtp.pass },
+      });
       await transporter.sendMail({
-        from: user,
+        from: smtp.from,
         to: email,
         subject: 'Verify your email',
         html: `<p>Your verification code is:</p><h2>${otp}</h2><p>This code expires in 5 minutes.</p>`,

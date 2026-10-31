@@ -19,6 +19,13 @@ dotenv.config();
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
+  // Express's default JSON limit is 100kb, so every face photo bigger than that
+  // (/attendance/verify, /attendance/enroll-face, biometric-face) was rejected with
+  // 413 before reaching the controller — a full-resolution phone camera shot is
+  // always over it, which is why mobile face attendance never marked anyone.
+  app.useBodyParser('json', { limit: '10mb' });
+  app.useBodyParser('urlencoded', { limit: '10mb', extended: true });
+
   // Behind nginx on the same machine: take the client IP from X-Forwarded-For, or every visitor
   // looks like 127.0.0.1 and they all share one rate-limit bucket. 'loopback' = trust only a
   // local proxy, so a client can't spoof its IP by sending the header itself.

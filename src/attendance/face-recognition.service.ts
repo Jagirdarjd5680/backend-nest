@@ -56,14 +56,15 @@ export class FaceRecognitionService {
   }
 
   /** Descriptors of every face in the photo (largest/clearest faces first). */
-  private async detect(imageBase64: string): Promise<Float32Array[]> {
+  private async detect(imageBase64: string, minConfidence = 0.5): Promise<Float32Array[]> {
     await this.init();
     const input = await this.decode(imageBase64);
     try {
       const results = await faceapi
-        .detectAllFaces(input, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 }))
+        .detectAllFaces(input, new faceapi.SsdMobilenetv1Options({ minConfidence }))
         .withFaceLandmarks()
         .withFaceDescriptors();
+      this.logger.debug(`detect: ${input.shape[1]}x${input.shape[0]} minConfidence=${minConfidence} faces=${results.length}`);
       return results
         .sort((a: any, b: any) => b.detection.box.area - a.detection.box.area)
         .map((r: any) => r.descriptor as Float32Array);
@@ -74,7 +75,11 @@ export class FaceRecognitionService {
 
   /** One descriptor for enrollment — the biggest face in the photo. Null when no face is found. */
   async descriptor(imageBase64: string): Promise<number[] | null> {
-    const faces = await this.detect(imageBase64);
+    let faces = await this.detect(imageBase64);
+    // Webcam enrollment frames are often dim/soft; one lenient retry before giving up.
+    // Only the biggest face is kept, so the lower bar can't enroll a stray background face
+    // over the student. Check-in (recognize) keeps the strict 0.5.
+    if (!faces.length) faces = await this.detect(imageBase64, 0.3);
     return faces.length ? Array.from(faces[0]) : null;
   }
 

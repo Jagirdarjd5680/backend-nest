@@ -1,6 +1,6 @@
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
-import { Controller, Get, Post, Patch, Delete, Param, Body, Request, UseGuards, Logger } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Param, Body, Query, Request, UseGuards, Logger, BadRequestException } from '@nestjs/common';
 import { assertSelfOrStaff } from '../common/access';
 import { AttendanceService } from './attendance.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -22,10 +22,20 @@ export class AttendanceController {
   @Get('batch/:batchId')
   @UseGuards(RolesGuard)
   @Roles('admin', 'teacher')
-  async findByBatch(@Param('batchId') batchId: string) {
+  async findByBatch(@Param('batchId') batchId: string, @Query('date') date?: string) {
     const numId = parseInt(batchId, 10);
     if (isNaN(numId)) return { success: false, message: 'Invalid Batch ID' };
-    return this.service.findByBatch(numId);
+    return this.service.findByBatch(numId, date === 'today');
+  }
+
+  @Post('mark')
+  @UseGuards(RolesGuard)
+  @Roles('admin', 'teacher')
+  async markManual(@Body() body: { batchId: any; studentId: any; status?: string }) {
+    const batchId = parseInt(String(body.batchId), 10);
+    const studentId = parseInt(String(body.studentId), 10);
+    if (isNaN(batchId) || isNaN(studentId)) throw new BadRequestException('batchId and studentId are required');
+    return this.service.markManual(batchId, studentId, body.status === 'absent' ? 'absent' : 'present');
   }
 
   @Get('user/:userId')

@@ -5,6 +5,20 @@ import { PrismaService } from '../prisma/prisma.service';
 export class BatchesService {
   constructor(private prisma: PrismaService) {}
 
+  /** Batch membership lives in BookingBatch (what UsersService.assignBatchesToUser writes and
+   * timetables/batch-materials read). Students with only legacy attendance rows still count so
+   * pre-migration data doesn't vanish from the roster. */
+  private memberWhere(batchId: number) {
+    return {
+      role: 'student',
+      isDeleted: false,
+      OR: [
+        { bookingBatches: { some: { batchId } } },
+        { attendances: { some: { batchId } } },
+      ],
+    };
+  }
+
   async findAll() {
     try {
       const batches = await this.prisma.batch.findMany({
@@ -20,13 +34,7 @@ export class BatchesService {
       const formatted = await Promise.all(
         batches.map(async (batch) => {
           const studentCount = await this.prisma.user.count({
-            where: {
-              role: 'student',
-              isDeleted: false,
-              attendances: {
-                some: { batchId: batch.id },
-              },
-            },
+            where: this.memberWhere(batch.id),
           });
 
           return {
@@ -66,13 +74,7 @@ export class BatchesService {
     }
 
     const studentCount = await this.prisma.user.count({
-      where: {
-        role: 'student',
-        isDeleted: false,
-        attendances: {
-          some: { batchId: batch.id },
-        },
-      },
+      where: this.memberWhere(batch.id),
     });
 
     const formatted = {
@@ -91,13 +93,7 @@ export class BatchesService {
   async getStudents(id: number) {
     await this.findOne(id);
     const students = await this.prisma.user.findMany({
-      where: {
-        role: 'student',
-        isDeleted: false,
-        attendances: {
-          some: { batchId: id },
-        },
-      },
+      where: this.memberWhere(id),
       select: {
         id: true,
         name: true,

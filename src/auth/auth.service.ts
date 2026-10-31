@@ -14,6 +14,7 @@ import * as bcrypt from 'bcryptjs';
 import * as crypto from 'crypto';
 import * as MailChecker from 'mailchecker';
 import { normalizePhone } from '../common/phone.util';
+import { getSmtpConfig } from '../utils/smtp-config';
 
 const FALLBACK_DEVICE: DeviceInfo = { deviceId: 'unknown-device' };
 
@@ -208,10 +209,6 @@ export class AuthService {
   }
 
   async getMe(userId: number) {
-    const user = await this.usersService.findById(userId);
-    if (!user) throw new UnauthorizedException('User not found');
-    const { password, ...safeUser } = user as any;
-
     // The mobile app calls this on every app open using its long-lived stored token —
     // it does NOT re-run the login flow daily, so gating the streak behind a fresh
     // credentials login (the only place it used to be recorded, in SessionService.
@@ -219,9 +216,15 @@ export class AuthService {
     // their password/OTP again. Recording it here too makes "open the app" count,
     // matching what users actually expect from a daily streak; recordDailyLogin is
     // still idempotent per calendar day (IST) so this can't double-count.
-    if (user.role === 'student') {
-      this.gamificationService.recordDailyLogin(userId).catch(() => {});
+    // Awaited, then re-read, so today's open is already in the streak we return.
+    const user0 = await this.usersService.findById(userId);
+    if (!user0) throw new UnauthorizedException('User not found');
+    if (user0.role === 'student') {
+      await this.gamificationService.recordDailyLogin(userId).catch(() => {});
     }
+
+    const user = (await this.usersService.findById(userId)) ?? user0;
+    const { password, ...safeUser } = user as any;
 
     return {
       success: true,
@@ -491,20 +494,22 @@ export class AuthService {
 
   // ─── Helpers ─────────────────────────────────────────────────────────────
   private async _sendResetEmail(email: string, name: string, link: string) {
-    const host = process.env.SMTP_HOST;
-    const user = process.env.SMTP_USER;
-    const pass = process.env.SMTP_PASS;
-
-    if (!host || !user || !pass) {
+    const smtp = await getSmtpConfig(this.prisma);
+    if (!smtp) {
       console.log(`[AuthService] SMTP not configured. Password reset link for ${email}: ${link}`);
       return;
     }
 
     try {
       const nodemailer = require('nodemailer');
-      const transporter = nodemailer.createTransport({ host, port: 587, auth: { user, pass } });
+      const transporter = nodemailer.createTransport({
+        host: smtp.host,
+        port: smtp.port,
+        secure: smtp.port === 465,
+        auth: { user: smtp.user, pass: smtp.pass },
+      });
       await transporter.sendMail({
-        from: user,
+        from: smtp.from,
         to: email,
         subject: 'Password Reset Request',
         html: `<p>Hi ${name},</p><p>Click <a href="${link}">here</a> to reset your password. This link expires in 1 hour.</p>`,
@@ -530,6 +535,13 @@ export class AuthService {
       isActive: user.isActive ?? true,
       twoFactorEnabled: user.twoFactorEnabled ?? false,
       source: user.source || 'web',
+      // Same `{current, longest}` shape as GET /gamification/my-stats.
+      points: user.points ?? 0,
+      streaks: {
+        current: user.currentStreak ?? 0,
+        longest: user.longestStreak ?? 0,
+        lastActiveDate: user.lastActiveDate ?? null,
+      },
     };
   }
 }
