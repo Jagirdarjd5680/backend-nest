@@ -24,6 +24,13 @@ export class ExamResultsController {
     return { success: true, data: await this.service.findByExam(parseInt(examId, 10)) };
   }
 
+  /** The signed-in student's own results, grouped by exam — every attempt, scores only. */
+  @Get('my')
+  async findMine(@Request() req: any) {
+    const data = await this.service.findMine(req.user.id);
+    return { success: true, data };
+  }
+
   @Get('details/:id')
   async findDetails(@Param('id') id: string, @Request() req: any) {
     const data = await this.service.findDetails(parseInt(id, 10));

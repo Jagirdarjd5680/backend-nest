@@ -3,6 +3,15 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ExpoPushService } from '../notifications/expo-push.service';
 import { SendMessageDto } from './dto/send-message.dto';
 import { ChatGateway } from './chat.gateway';
+import { existsSync, statSync, unlinkSync } from 'fs';
+import { join } from 'path';
+
+const STAFF_ROLES = ['admin', 'teacher', 'tutor'];
+/** `/uploads/chat/<file>` → its path on disk (null for anything outside that folder). */
+function chatFilePath(url: string | null | undefined): string | null {
+  const m = /^\/uploads\/chat\/([^/?#]+)$/.exec(url || '');
+  return m ? join(process.cwd(), 'uploads', 'chat', m[1]) : null;
+}
 
 @Injectable()
 export class ChatService {
@@ -89,6 +98,88 @@ export class ChatService {
     });
 
     return { success: true, data: messages };
+  }
+
+  /**
+   * One card per chat participant that has media in their conversations: the non-staff side of
+   * each image message (a student/parent), or the sender when both sides are staff.
+   */
+  async getChatMediaUsers() {
+    const rows = await this.prisma.chatMessage.findMany({
+      where: { image: { not: null }, NOT: { image: '' } },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        image: true,
+        createdAt: true,
+        sender: { select: { id: true, name: true, email: true, phone: true, avatar: true, role: true, rollNumber: true } },
+        receiver: { select: { id: true, name: true, email: true, phone: true, avatar: true, role: true, rollNumber: true } },
+      },
+    });
+    const byUser = new Map<number, any>();
+    for (const r of rows) {
+      const owner = r.sender && !STAFF_ROLES.includes(r.sender.role) ? r.sender : r.receiver && !STAFF_ROLES.includes(r.receiver.role) ? r.receiver : r.sender;
+      if (!owner) continue;
+      const entry = byUser.get(owner.id) ?? { ...owner, _id: String(owner.id), mediaCount: 0, lastAt: r.createdAt, previews: [] as string[] };
+      entry.mediaCount++;
+      if (entry.previews.length < 3) entry.previews.push(r.image);
+      byUser.set(owner.id, entry);
+    }
+    return { success: true, data: [...byUser.values()] };
+  }
+
+  /** Every image in conversations with [userId] (both directions), newest first. */
+  async getChatMediaForUser(userId: number) {
+    const rows = await this.prisma.chatMessage.findMany({
+      where: { image: { not: null }, NOT: { image: '' }, OR: [{ senderId: userId }, { receiverId: userId }] },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, image: true, message: true, createdAt: true, sender: { select: { id: true, name: true, role: true } }, receiver: { select: { id: true, name: true } } },
+    });
+    const data = rows.map((r) => {
+      const file = chatFilePath(r.image);
+      let size = 0;
+      try {
+        if (file && existsSync(file)) size = statSync(file).size;
+      } catch {}
+      return { ...r, _id: String(r.id), fileUrl: r.image, fileName: (r.image || '').split('/').pop(), size };
+    });
+    return { success: true, data };
+  }
+
+  /**
+   * Permanent delete: the file leaves the disk and the attachment leaves the chat for both people
+   * (a message that was only the image is removed; one with text keeps its text).
+   */
+  async deleteChatMedia(messageIds: number[]) {
+    if (!messageIds.length) return { success: true, deleted: 0 };
+    const rows = await this.prisma.chatMessage.findMany({
+      where: { id: { in: messageIds }, image: { not: null } },
+      select: { id: true, image: true, message: true, senderId: true, receiverId: true },
+    });
+    for (const r of rows) {
+      const file = chatFilePath(r.image);
+      try {
+        if (file && existsSync(file)) unlinkSync(file);
+      } catch (err) {
+        console.error(`[ChatService] could not delete ${file}:`, err.message);
+      }
+    }
+    const textless = rows.filter((r) => !(r.message || '').trim()).map((r) => r.id);
+    const withText = rows.filter((r) => (r.message || '').trim()).map((r) => r.id);
+    await this.prisma.$transaction([
+      this.prisma.chatMessage.deleteMany({ where: { id: { in: textless } } }),
+      this.prisma.chatMessage.updateMany({ where: { id: { in: withText } }, data: { image: null } }),
+    ]);
+    // Open chats drop the attachments without a refresh.
+    for (const r of rows) {
+      const payload = { messageIds: [r.id], removed: textless.includes(r.id) };
+      this.chatGateway.server.to(`user_${r.senderId}`).to(`user_${r.receiverId}`).emit('chat_media_deleted', payload);
+    }
+    return { success: true, deleted: rows.length };
+  }
+
+  async getMyChatStatus(userId: number) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { isBlockedFromChat: true } });
+    return { success: true, data: { isBlockedFromChat: !!user?.isBlockedFromChat } };
   }
 
   /**
@@ -192,13 +283,17 @@ export class ChatService {
     console.log(`[ChatService] Message ${message.id} created: ${senderId} -> ${receiverId}`);
     this.broadcastMessage(message);
 
-    this.expoPushService
-      .sendToUser(receiverId, message.sender?.name ?? 'New message', dto.message || 'Sent an image', {
-        type: 'chat_message',
-        senderId: String(senderId),
-        sessionId: dto.sessionId ?? '',
-      })
-      .catch(() => {});
+    // Never push to the sender's own phone (same device token on both accounts).
+    const receiver = await this.prisma.user.findUnique({ where: { id: receiverId }, select: { expoPushToken: true } });
+    if (receiver?.expoPushToken && receiver.expoPushToken !== sender.expoPushToken) {
+      this.expoPushService
+        .sendToUser(receiverId, message.sender?.name ?? 'New message', dto.message || 'Sent an image', {
+          type: 'chat_message',
+          senderId: String(senderId),
+          sessionId: dto.sessionId ?? '',
+        })
+        .catch(() => {});
+    }
 
     return { success: true, data: message };
   }

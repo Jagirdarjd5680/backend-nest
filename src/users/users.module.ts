@@ -5,6 +5,7 @@ import { UsersController } from './users.controller';
 import { UsersRecycleBinGateway } from './users-recycle-bin.gateway';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { FeeRecordsModule } from '../fee-records/fee-records.module';
+import { CourseProgressModule } from '../course-progress/course-progress.module';
 
 @Module({
   imports: [
@@ -13,6 +14,7 @@ import { FeeRecordsModule } from '../fee-records/fee-records.module';
     }),
     NotificationsModule,
     FeeRecordsModule,
+    CourseProgressModule,
   ],
   controllers: [UsersController],
   providers: [UsersService, UsersRecycleBinGateway],

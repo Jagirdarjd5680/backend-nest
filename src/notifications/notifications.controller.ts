@@ -20,6 +20,15 @@ export class NotificationsController {
 
   @Post('register-token')
   async registerFcmToken(@Request() req: any, @Body() body: { token: string; platform?: string }) {
+    // A token identifies a device, not a person: when another account signs in on the same
+    // phone it must stop receiving the previous account's pushes (otherwise your own chat
+    // messages came back to you as notifications).
+    if (body.token) {
+      await this.prisma.user.updateMany({
+        where: { expoPushToken: body.token, id: { not: req.user.id } },
+        data: { expoPushToken: null, expoPushTokenPlatform: null },
+      });
+    }
     await this.prisma.user.update({
       where: { id: req.user.id },
       data: { expoPushToken: body.token, expoPushTokenPlatform: body.platform ?? null },

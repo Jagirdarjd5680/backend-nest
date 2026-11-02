@@ -122,6 +122,8 @@ model LectureProgress {
   courseId        Int
   lectureId       String
   watchedSeconds  Int      @default(0)
+  /// Every second ever watched, rewatches included (watchedSeconds is capped at the lecture length).
+  totalWatchedSeconds Int  @default(0)
   durationSeconds Int?
   updatedAt       DateTime @updatedAt
 

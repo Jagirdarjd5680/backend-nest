@@ -27,6 +27,13 @@ export class GamificationController {
     return this.service.getLeaderboardByStreaks(limitNum);
   }
 
+  /** The app calls this when it opens / resumes — a daily visit is what keeps a streak alive. */
+  @Post('check-in')
+  async checkIn(@Request() req: any) {
+    if (req.user.role === 'student') await this.service.recordDailyLogin(req.user.id);
+    return this.service.getUserGamification(req.user.id);
+  }
+
   @Get('my-stats')
   async getMyStats(@Request() req: any) {
     return this.service.getUserGamification(req.user.id);

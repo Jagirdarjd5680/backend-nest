@@ -1,15 +1,24 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import axios from 'axios';
-import { registerFonts as registerBodyFonts, FONT, FONT_BOLD } from './fonts';
 
-const SCRIPT_FONT = 'Script';
-const SCRIPT_REGULAR = require.resolve('@fontsource/dancing-script/files/dancing-script-latin-700-normal.woff2');
+/**
+ * Certificate of Completion — A4 portrait, white with a yellow outer / black inner frame,
+ * the institute's own layout (issue-date + certificate-no tabs, ISO badge, yellow highlight
+ * bars under the title, student and course). Everything that varies (institute name, logo,
+ * signature image, signatory, website) comes from Settings → General → Certificate.
+ */
 
-const GOLD = '#C9A24B';
-const GOLD_LIGHT = '#E4C978';
-const BG_DARK = '#141414';
-const BG_DARK_2 = '#1c1c1c';
+const HEAD = 'Oswald-Bold';
+const BODY = 'Oswald';
+const BODY_MEDIUM = 'Oswald-Medium';
+const font = (weight: number) => require.resolve(`@fontsource/oswald/files/oswald-latin-${weight}-normal.woff`);
+
+const YELLOW = '#FFC20E';
+const INK = '#111111';
+const MUTED = '#3A3A3A';
+const PANEL = '#E6E6E6';
+const SHAPE = '#F1F1F1';
 
 export interface CertificateData {
   companyName: string;
@@ -17,11 +26,35 @@ export interface CertificateData {
   logo?: string; // data URI, http(s) URL, or local /uploads/... path
   studentName: string;
   courseName: string;
-  softwareCovered?: string; // e.g. "Photoshop, Illustrator, Corel Draw"
   issueDate: Date;
   certificateId: string;
-  signatureName?: string; // e.g. "Founder & CEO - Jitendra Rajpurohit"
-  signatureImage?: string;
+  /** e.g. "45 Hours" — dashed blank line when unknown. */
+  duration?: string;
+  /** e.g. "A+" — dashed blank line when unknown. */
+  grade?: string;
+  /** e.g. "Photoshop, Illustrator" — dashed blank line when unknown. */
+  specialization?: string;
+  signatureName?: string; // right column, e.g. "Jitendra Kumar Rajpurohit"
+  signatureTitle?: string; // under it, e.g. "Founder & CEO"
+  signatureImage?: string; // left column, above "Authorized Signature"
+  website?: string; // footer, e.g. "godofgraphics.in"
+  /** Kept for older callers; not printed on this layout. */
+  softwareCovered?: string;
+}
+
+/** Settings → General → Certificate (falls back to the older Company/siteName fields). */
+export function certificateBranding(settings: any): Omit<CertificateData, 'studentName' | 'courseName' | 'issueDate' | 'certificateId'> {
+  const g = settings?.general ?? {};
+  const c = settings?.company ?? {};
+  return {
+    companyName: g.certificateInstituteName || g.siteName || 'God of Graphics',
+    companyTagline: g.certificateTagline || c.tagline || 'Premier Academy for Multimedia & Computer Education',
+    logo: g.pdfLogo || g.siteLogo || '',
+    signatureName: g.certificateSignatoryName || c.signatoryName || undefined,
+    signatureTitle: g.certificateSignatoryTitle || 'Founder & CEO',
+    signatureImage: g.pdfCertificateSignature || undefined,
+    website: g.certificateWebsite || undefined,
+  };
 }
 
 async function loadImage(src?: string): Promise<Buffer | string | null> {
@@ -29,7 +62,7 @@ async function loadImage(src?: string): Promise<Buffer | string | null> {
   try {
     if (src.startsWith('data:image')) return Buffer.from(src.replace(/^data:image\/\w+;base64,/, ''), 'base64');
     if (src.startsWith('http')) {
-      const res = await axios.get(src, { responseType: 'arraybuffer' });
+      const res = await axios.get(src, { responseType: 'arraybuffer', timeout: 8000 });
       return Buffer.from(res.data);
     }
     const p = path.join(process.cwd(), src.startsWith('/') ? src : '/' + src);
@@ -39,216 +72,158 @@ async function loadImage(src?: string): Promise<Buffer | string | null> {
   }
 }
 
-/** One quarter-circle "curl" made of a few nested arcs + a dot — the base unit the corner ornament repeats. */
-function drawCurl(doc: PDFKit.PDFDocument, cx: number, cy: number, r: number, startAngle: number) {
-  for (let i = 0; i < 3; i++) {
-    const rr = r - i * 5;
-    if (rr <= 2) continue;
-    doc
-      .save()
-      .translate(cx, cy)
-      .rotate(startAngle)
-      .path(`M ${-rr} 0 A ${rr} ${rr} 0 0 1 0 ${-rr}`)
-      .strokeColor(GOLD)
-      .lineWidth(0.8)
-      .stroke()
-      .restore();
-  }
-  doc.circle(cx, cy, 2).fillColor(GOLD).fill();
+/** Largest font size (≤ max) at which `text` fits in `width`. */
+function fitSize(doc: PDFKit.PDFDocument, fontName: string, text: string, width: number, max: number, min = 10): number {
+  let size = max;
+  doc.font(fontName);
+  while (size > min && doc.fontSize(size).widthOfString(text) > width) size -= 1;
+  return size;
 }
 
-/**
- * Draws one gold corner flourish (an L-frame with a decorative curl at the apex) at (x, y),
- * oriented so it opens toward the page center. `flipX`/`flipY` mirror it for the other 3 corners.
- */
-function drawCornerOrnament(doc: PDFKit.PDFDocument, x: number, y: number, flipX: boolean, flipY: boolean) {
-  const armLen = 95;
-  const sx = flipX ? -1 : 1;
-  const sy = flipY ? -1 : 1;
-
-  doc.save().translate(x, y).scale(sx, sy);
-
-  // Double L-frame lines
-  doc.moveTo(0, 22).lineTo(0, 6).lineTo(6, 0).lineTo(armLen, 0).strokeColor(GOLD).lineWidth(1.3).stroke();
-  doc.moveTo(0, 32).lineTo(0, 14).lineTo(14, 0).lineTo(armLen - 12, 0).strokeColor(GOLD_LIGHT).lineWidth(0.6).stroke();
-
-  // Decorative curl nested in the corner apex
-  doc.save().translate(22, 22);
-  for (let i = 0; i < 4; i++) {
-    const rr = 16 - i * 4;
-    doc
-      .path(`M 0 ${rr} A ${rr} ${rr} 0 0 1 ${rr} 0`)
-      .strokeColor(i % 2 === 0 ? GOLD : GOLD_LIGHT)
-      .lineWidth(0.7)
-      .stroke();
-  }
-  doc.circle(0, 0, 2.2).fillColor(GOLD).fill();
-  doc.restore();
-
-  // Small leaf accents along each arm
-  [40, 65].forEach((d) => {
-    doc.save().translate(d, -2).rotate(-20);
-    doc.path('M 0 0 C 4 -6, 10 -6, 12 0 C 10 6, 4 6, 0 0 Z').fillColor(GOLD).fillOpacity(0.85).fill();
-    doc.restore();
-    doc.save().translate(-2, d).rotate(70);
-    doc.path('M 0 0 C 4 -6, 10 -6, 12 0 C 10 6, 4 6, 0 0 Z').fillColor(GOLD).fillOpacity(0.85).fill();
-    doc.restore();
-  });
-
-  doc.restore();
+/** Centered text sitting on a yellow highlight bar (bar covers the lower part of the letters). */
+function highlighted(doc: PDFKit.PDFDocument, text: string, y: number, size: number, W: number, maxWidth: number) {
+  const s = fitSize(doc, HEAD, text, maxWidth, size);
+  doc.font(HEAD).fontSize(s);
+  const w = doc.widthOfString(text);
+  const barH = s * 0.42;
+  doc.rect((W - w) / 2 - 14, y + s * 0.72, w + 28, barH).fillColor(YELLOW).fill();
+  doc.fillColor(INK).text(text, 0, y, { width: W, align: 'center', lineBreak: false });
+  return y + s * 1.35;
 }
 
-/** A compact circular "certified" seal badge — center label + a ring of small tick marks instead of curved text (pdfkit has no native text-on-path support). */
-function drawSealBadge(doc: PDFKit.PDFDocument, cx: number, cy: number, r: number, label: string) {
-  doc.save();
-  doc.circle(cx, cy, r).fillColor('#B8860B').fill();
-  doc.circle(cx, cy, r).strokeColor(GOLD_LIGHT).lineWidth(1.5).stroke();
-  doc.circle(cx, cy, r - 6).strokeColor(GOLD_LIGHT).lineWidth(0.8).stroke();
-
-  const tickCount = 32;
-  for (let i = 0; i < tickCount; i++) {
-    const angle = (i / tickCount) * Math.PI * 2;
-    const inner = r - 6;
-    const outer = r - 2;
-    doc
-      .moveTo(cx + Math.cos(angle) * inner, cy + Math.sin(angle) * inner)
-      .lineTo(cx + Math.cos(angle) * outer, cy + Math.sin(angle) * outer)
-      .strokeColor(GOLD_LIGHT)
-      .lineWidth(0.6)
-      .stroke();
+/** "Label: value" with a dashed underline; the value is printed on the line when known. */
+function field(doc: PDFKit.PDFDocument, label: string, value: string | undefined, x: number, y: number, width: number) {
+  doc.font(BODY).fontSize(17).fillColor(INK).text(`${label}:`, x, y, { lineBreak: false });
+  const lx = x + doc.widthOfString(`${label}:`) + 6;
+  const ly = y + 21;
+  doc.save().moveTo(lx, ly).lineTo(x + width, ly).dash(5, { space: 4 }).strokeColor(INK).lineWidth(1).stroke().restore();
+  doc.undash();
+  if (value) {
+    const s = fitSize(doc, BODY_MEDIUM, value, x + width - lx - 4, 15, 9);
+    doc.font(BODY_MEDIUM).fontSize(s).fillColor(INK).text(value, lx + 2, y + 2 + (15 - s), { width: x + width - lx - 4, lineBreak: false });
   }
-
-  const textWidth = (r - 8) * 2;
-  const textX = cx - r + 8;
-  const [labelTop, labelBottom] = label.split(' ');
-  doc.font(FONT_BOLD).fontSize(6.5).fillColor('#1a1a1a').text('CERTIFIED', textX, cy - r + 14, { width: textWidth, align: 'center', characterSpacing: 0.5 });
-  doc.font(FONT_BOLD).fontSize(13).fillColor('#1a1a1a').text(labelTop, textX, cy - 13, { width: textWidth, align: 'center' });
-  doc.font(FONT_BOLD).fontSize(13).fillColor('#1a1a1a').text(labelBottom || '', textX, cy + 2, { width: textWidth, align: 'center' });
-  doc.font(FONT_BOLD).fontSize(6.5).fillColor('#1a1a1a').text('CERTIFIED', textX, cy + r - 20, { width: textWidth, align: 'center', characterSpacing: 0.5 });
-
-  // Ribbon tails beneath the seal
-  doc.path(`M ${cx - r * 0.5} ${cy + r * 0.75} L ${cx - r * 0.75} ${cy + r * 1.6} L ${cx - r * 0.15} ${cy + r * 1.15} Z`).fillColor('#8B6508').fill();
-  doc.path(`M ${cx + r * 0.5} ${cy + r * 0.75} L ${cx + r * 0.75} ${cy + r * 1.6} L ${cx + r * 0.15} ${cy + r * 1.15} Z`).fillColor('#8B6508').fill();
-  doc.restore();
 }
 
-/** Draws the "Certificate of Completion" onto an already-created landscape pdfkit document. */
+/** Grey rounded tab at the top corners: a small label over a value. */
+function tab(doc: PDFKit.PDFDocument, x: number, y: number, w: number, label: string, value: string) {
+  doc.roundedRect(x, y, w, 50, 10).fillColor(PANEL).fill();
+  doc.font(BODY).fontSize(14).fillColor(INK).text(label, x, y + 6, { width: w, align: 'center', lineBreak: false });
+  const s = fitSize(doc, BODY, value, w - 16, 12, 7);
+  doc.font(BODY).fontSize(s).fillColor(MUTED).text(value, x + 8, y + 28, { width: w - 16, align: 'center', lineBreak: false });
+}
+
 export async function drawCertificate(doc: PDFKit.PDFDocument, data: CertificateData): Promise<void> {
-  registerBodyFonts(doc);
-  doc.registerFont(SCRIPT_FONT, SCRIPT_REGULAR);
+  doc.registerFont(HEAD, font(700));
+  doc.registerFont(BODY_MEDIUM, font(500));
+  doc.registerFont(BODY, font(400));
 
-  const W = doc.page.width;
-  const H = doc.page.height;
+  const W = doc.page.width; // 595 (A4 portrait)
+  const H = doc.page.height; // 842
+  const cx = W / 2;
 
-  // ─── Background ───────────────────────────────────────────────────────
-  doc.rect(0, 0, W, H).fillColor(BG_DARK).fill();
-  // A handful of soft, oversized translucent strokes stand in for a marble-vein texture —
-  // an actual raster marble background image would look better but isn't available here.
-  doc.save();
-  for (let i = 0; i < 6; i++) {
-    const y = (H / 6) * i + (i % 2 === 0 ? 20 : -10);
-    doc
-      .moveTo(-50, y)
-      .bezierCurveTo(W * 0.3, y + 60, W * 0.6, y - 60, W + 50, y + 20)
-      .strokeColor(BG_DARK_2)
-      .lineWidth(30 + (i % 3) * 10)
-      .strokeOpacity(0.5)
-      .stroke();
-  }
+  // ─── Background: soft grey triangles + frames ────────────────────────────
+  doc.rect(0, 0, W, H).fillColor('#FFFFFF').fill();
+  doc.save().fillColor(SHAPE);
+  doc.polygon([0, 230], [80, 330], [0, 430]).fill();
+  doc.polygon([0, 470], [60, 560], [0, 650]).fill();
+  doc.polygon([W, 250], [W - 90, 360], [W, 470]).fill();
+  doc.polygon([W, 520], [W - 70, 610], [W, 700]).fill();
+  doc.polygon([W - 160, 0], [W - 60, 0], [W - 110, 60]).fill();
+  doc.polygon([160, H], [260, H], [210, H - 60]).fill();
   doc.restore();
 
-  // Outer + inner frame
-  doc.rect(18, 18, W - 36, H - 36).strokeColor(GOLD).lineWidth(1.5).stroke();
-  doc.rect(26, 26, W - 52, H - 52).strokeColor(GOLD).lineWidth(0.5).stroke();
+  doc.rect(16, 16, W - 32, H - 32).strokeColor(YELLOW).lineWidth(9).stroke();
+  doc.rect(28, 28, W - 56, H - 56).strokeColor(INK).lineWidth(1.6).stroke();
 
-  // Corner ornaments
-  drawCornerOrnament(doc, 26, 26, false, false);
-  drawCornerOrnament(doc, W - 26, 26, true, false);
-  drawCornerOrnament(doc, 26, H - 26, false, true);
-  drawCornerOrnament(doc, W - 26, H - 26, true, true);
+  // ─── Top tabs ─────────────────────────────────────────────────────────────
+  const d = data.issueDate;
+  const date = `${String(d.getDate()).padStart(2, '0')} / ${String(d.getMonth() + 1).padStart(2, '0')} / ${d.getFullYear()}`;
+  tab(doc, 46, 46, 128, 'Issue Date:', date);
+  tab(doc, W - 46 - 128, 46, 128, 'Certificate No:', data.certificateId);
 
-  // ─── Logo ─────────────────────────────────────────────────────────────
-  const centerX = W / 2;
-  let y = 42;
+  // ─── Logo, institute, tagline ─────────────────────────────────────────────
+  let y = 44;
   const logo = await loadImage(data.logo);
   if (logo) {
     try {
-      doc.image(logo as any, centerX - 34, y, { width: 68, height: 68, fit: [68, 68] });
-      y += 74;
+      doc.image(logo as any, cx - 26, y, { fit: [52, 52], align: 'center', valign: 'center' });
     } catch {
-      y += 6;
+      // unreadable logo — the name below still identifies the institute
     }
-  } else {
-    doc.circle(centerX, y + 30, 30).fillColor('#8B0000').fill();
-    doc.circle(centerX, y + 30, 30).strokeColor(GOLD).lineWidth(1.5).stroke();
-    doc.font(FONT_BOLD).fontSize(22).fillColor(GOLD_LIGHT).text(data.companyName.charAt(0), centerX - 30, y + 14, { width: 60, align: 'center' });
-    y += 68;
   }
-
-  // ─── Company name + tagline ──────────────────────────────────────────
-  doc.font(FONT_BOLD).fontSize(20).fillColor('#fff').text(data.companyName.toUpperCase(), 0, y, { width: W, align: 'center', characterSpacing: 1.5 });
-  y = doc.y + 4;
+  y += 56;
+  const nameSize = fitSize(doc, HEAD, data.companyName.toUpperCase(), 250, 19);
+  doc.font(HEAD).fontSize(nameSize).fillColor(INK).text(data.companyName.toUpperCase(), 0, y, { width: W, align: 'center', characterSpacing: 0.6, lineBreak: false });
+  y += nameSize + 8;
   if (data.companyTagline) {
-    doc.font(FONT_BOLD).fontSize(9).fillColor(GOLD).text(data.companyTagline.toUpperCase(), 0, y, { width: W, align: 'center', characterSpacing: 1 });
-    y = doc.y + 10;
+    const ts = fitSize(doc, BODY_MEDIUM, data.companyTagline, W - 130, 13);
+    doc.font(BODY_MEDIUM).fontSize(ts).fillColor(INK).text(data.companyTagline, 0, y, { width: W, align: 'center', lineBreak: false });
+    y += ts + 12;
   }
-  doc.moveTo(centerX - 90, y).lineTo(centerX + 90, y).strokeColor(GOLD).lineWidth(0.8).stroke();
-  y += 14;
 
-  // ─── Certificate of Completion (script) ──────────────────────────────
-  doc.font(SCRIPT_FONT).fontSize(46).fillColor(GOLD_LIGHT).text('Certificate of Completion', 0, y, { width: W, align: 'center' });
-  y = doc.y + 10;
+  // ISO Certified badge
+  const bw = 112;
+  const bx = cx - bw / 2;
+  doc.roundedRect(bx, y, bw, 30, 6).strokeColor('#9A9A9A').lineWidth(1).stroke();
+  doc.circle(bx + 20, y + 15, 10).strokeColor('#9A9A9A').lineWidth(0.8).stroke();
+  doc.font(HEAD).fontSize(12).fillColor('#5A5A5A').text('ISO', bx + 8, y + 7, { width: 24, align: 'center', lineBreak: false });
+  doc.moveTo(bx + 36, y + 4).lineTo(bx + 36, y + 26).strokeColor('#9A9A9A').lineWidth(0.8).stroke();
+  doc.font(HEAD).fontSize(9).fillColor('#5A5A5A').text('ISO', bx + 42, y + 3, { lineBreak: false });
+  doc.font(BODY).fontSize(12).fillColor('#5A5A5A').text('Certified', bx + 42, y + 12, { lineBreak: false });
+  y += 48;
 
-  doc.font(FONT_BOLD).fontSize(13).fillColor('#fff').text('PROUDLY PRESENTED TO', 0, y, { width: W, align: 'center', characterSpacing: 3 });
-  y = doc.y + 16;
+  // ─── Title ────────────────────────────────────────────────────────────────
+  y = highlighted(doc, 'CERTIFICATE OF COMPLETION', y, 38, W, W - 150);
+  y += 6;
+  doc.moveTo(cx - 180, y).lineTo(cx + 180, y).strokeColor(YELLOW).lineWidth(2.5).stroke();
+  y += 34;
 
-  // ─── Student name ─────────────────────────────────────────────────────
-  doc.font(FONT_BOLD).fontSize(30).fillColor(GOLD_LIGHT).text(data.studentName.toUpperCase(), 60, y, { width: W - 120, align: 'center', characterSpacing: 1 });
-  y = doc.y + 6;
-  doc.moveTo(centerX - 220, y).lineTo(centerX + 220, y).strokeColor(GOLD).lineWidth(1).stroke();
+  // ─── Awarded to ───────────────────────────────────────────────────────────
+  doc.font(BODY).fontSize(19).fillColor(INK).text('This certificate is proudly awarded to', 0, y, { width: W, align: 'center', lineBreak: false });
+  y += 46;
+  y = highlighted(doc, data.studentName, y, 28, W, W - 160);
+  y += 20;
+
+  doc.font(BODY).fontSize(19).fillColor(INK).text('For successfully completing the professional course in', 0, y, { width: W, align: 'center', lineBreak: false });
+  y += 44;
+  y = highlighted(doc, data.courseName, y, 27, W, W - 130);
   y += 18;
 
-  // ─── Course line ──────────────────────────────────────────────────────
-  const leftX = 70;
-  const labelWidth = 240;
-  doc.font(FONT_BOLD).fontSize(12).fillColor('#fff').text('For succesfully completing the ', leftX, y, { continued: true, width: labelWidth });
-  doc.font(FONT).fontSize(13).fillColor('#eee').text(data.courseName, { width: W - leftX - 70 });
-  doc.moveTo(leftX + labelWidth + 4, doc.y - 2).lineTo(W - 70, doc.y - 2).strokeColor(GOLD).lineWidth(0.5).stroke();
-  y = doc.y + 6;
-
-  if (data.softwareCovered) {
-    doc.font(FONT_BOLD).fontSize(12).fillColor('#fff').text('course. Software coverd', leftX, y, { continued: true, width: labelWidth });
-    doc.font(FONT).fontSize(13).fillColor('#eee').text(data.softwareCovered, { width: W - leftX - 70 });
-    doc.moveTo(leftX + labelWidth + 4, doc.y - 2).lineTo(W - 70, doc.y - 2).strokeColor(GOLD).lineWidth(0.5).stroke();
-    y = doc.y + 6;
-  }
-  doc.moveTo(leftX, y + 14).lineTo(W - 70, y + 14).strokeColor(GOLD).lineWidth(0.4).stroke();
-
-  // ─── Footer: date / seal / signature ─────────────────────────────────
-  const footerY = H - 110;
-  doc.font(FONT).fontSize(12).fillColor('#fff').text(
-    data.issueDate.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }).toUpperCase(),
-    70,
-    footerY,
-    { width: 220 },
+  doc.font(BODY).fontSize(18).fillColor(INK).text(
+    `At ${data.companyName} Institute, demonstrating creativity, practical knowledge and professional skills.`,
+    80,
+    y,
+    { width: W - 160, align: 'center', lineGap: 4 },
   );
-  doc.moveTo(70, doc.y + 4).lineTo(290, doc.y + 4).strokeColor(GOLD).lineWidth(0.8).stroke();
-  doc.font(FONT).fontSize(7.5).fillColor('#aaa').text('DATE OF ISSUED', 70, doc.y + 8);
-  doc.text(`CERTIFICATE ID - ${data.certificateId}`, 70, doc.y + 2);
+  y = doc.y + 40;
 
-  drawSealBadge(doc, centerX, footerY + 42, 48, 'ISO 9001');
+  // ─── Details ──────────────────────────────────────────────────────────────
+  field(doc, 'Duration', data.duration, 72, y, 220);
+  field(doc, 'Grade', data.grade, 312, y, 212);
+  y += 46;
+  field(doc, 'Project / Specialization', data.specialization, 72, y, 452);
 
-  const sigImage = await loadImage(data.signatureImage);
-  const sigX = W - 290;
-  if (sigImage) {
+  // ─── Signatures ───────────────────────────────────────────────────────────
+  const lineY = H - 118;
+  const sig = await loadImage(data.signatureImage);
+  if (sig) {
     try {
-      doc.image(sigImage as any, sigX + 40, footerY - 30, { width: 100, height: 45, fit: [100, 45] });
+      doc.image(sig as any, 80, lineY - 62, { fit: [150, 58], align: 'center', valign: 'bottom' });
     } catch {
-      // No signature image — the underline still reads fine on its own.
+      // no usable image — the blank line is still signable by hand
     }
   }
-  doc.moveTo(sigX, footerY + 20).lineTo(sigX + 220, footerY + 20).strokeColor(GOLD).lineWidth(0.8).stroke();
+  doc.moveTo(54, lineY).lineTo(250, lineY).strokeColor(INK).lineWidth(1.6).stroke();
+  doc.font(BODY).fontSize(17).fillColor(INK).text('Authorized Signature', 54, lineY + 6, { width: 196, align: 'center', lineBreak: false });
+
   if (data.signatureName) {
-    doc.font(FONT_BOLD).fontSize(9).fillColor('#fff').text(data.signatureName.toUpperCase(), sigX, footerY + 26, { width: 220, align: 'center', characterSpacing: 0.5 });
+    const ss = fitSize(doc, BODY_MEDIUM, data.signatureName, 210, 19, 11);
+    doc.font(BODY_MEDIUM).fontSize(ss).fillColor(INK).text(data.signatureName, W - 264, lineY - ss - 8, { width: 210, align: 'center', lineBreak: false });
+  }
+  doc.moveTo(W - 264, lineY).lineTo(W - 54, lineY).strokeColor(INK).lineWidth(1.6).stroke();
+  doc.font(BODY).fontSize(17).fillColor(INK).text(data.signatureTitle || 'Founder & CEO', W - 264, lineY + 6, { width: 210, align: 'center', lineBreak: false });
+
+  if (data.website) {
+    doc.font(BODY).fontSize(14).fillColor(INK).text(data.website, 0, H - 62, { width: W, align: 'center', lineBreak: false });
   }
 }

@@ -19,6 +19,34 @@ import { SendMessageDto } from './dto/send-message.dto';
 export class ChatController {
   constructor(private readonly chatService: ChatService) {}
 
+  // ─── Chat media (web Media Library → "Chat Media") — admin only ───────────
+  @UseGuards(RolesGuard)
+  @Roles('admin')
+  @Get('media-users')
+  async mediaUsers() {
+    return this.chatService.getChatMediaUsers();
+  }
+
+  @UseGuards(RolesGuard)
+  @Roles('admin')
+  @Get('media-user/:userId')
+  async mediaForUser(@Param('userId') userId: string) {
+    return this.chatService.getChatMediaForUser(parseInt(userId, 10));
+  }
+
+  @UseGuards(RolesGuard)
+  @Roles('admin')
+  @Post('media/bulk-delete')
+  async deleteMedia(@Body() body: { messageIds: (number | string)[] }) {
+    return this.chatService.deleteChatMedia((body?.messageIds ?? []).map((id) => parseInt(String(id), 10)).filter(Number.isInteger));
+  }
+
+  /** The caller's own chat status — students can't read /chat/user/:id (staff permission). */
+  @Get('me/status')
+  async myStatus(@Request() req: any) {
+    return this.chatService.getMyChatStatus(Number(req.user.id || req.user._id));
+  }
+
   @RequireModulePermission('chat', 'view')
   @Get('history/:userId')
   async getHistory(@Param('userId') userId: string, @Request() req: any) {

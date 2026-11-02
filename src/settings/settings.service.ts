@@ -3,7 +3,7 @@ import * as PDFDocument from 'pdfkit';
 import { PrismaService } from '../prisma/prisma.service';
 import { drawInvoice, InvoiceCompany } from '../common/pdf/invoiceTemplate';
 import { drawRegistrationLetter } from '../common/pdf/registrationLetterTemplate';
-import { drawCertificate } from '../common/pdf/certificateTemplate';
+import { drawCertificate, certificateBranding } from '../common/pdf/certificateTemplate';
 
 // Default settings structure matching old MongoDB settings
 const DEFAULT_SETTINGS = {
@@ -45,6 +45,14 @@ const DEFAULT_SETTINGS = {
   app: {
     version: '1.0.0',
     link: '',
+  },
+  // Settings → App Settings → Referral Rewards. Points are given when an admin marks a
+  // referral "completed" on /referral-records; withdrawals convert points with the rate below.
+  referral: {
+    referrerPoints: 100, // to the student who shared their code, per completed referral
+    newUserPoints: 50, // to the new student who joined with that code
+    pointsUnit: 100, // ...this many points
+    rupeesPerUnit: 10, // ...are worth this many rupees
   },
   appFeatures: {
     showEvents: true,
@@ -143,6 +151,19 @@ export class SettingsService {
   // GET /settings — full settings (admin only)
   async getAllSettings() {
     return this._buildSettingsObject();
+  }
+
+  /** Referral reward rules with defaults merged in (all non-negative numbers). */
+  async getReferralSettings() {
+    const all = await this._buildSettingsObject();
+    const r = { ...DEFAULT_SETTINGS.referral, ...(all.referral || {}) };
+    const num = (v: unknown, d: number) => (Number.isFinite(Number(v)) && Number(v) >= 0 ? Number(v) : d);
+    return {
+      referrerPoints: Math.round(num(r.referrerPoints, 100)),
+      newUserPoints: Math.round(num(r.newUserPoints, 50)),
+      pointsUnit: Math.max(1, Math.round(num(r.pointsUnit, 100))),
+      rupeesPerUnit: num(r.rupeesPerUnit, 10),
+    };
   }
 
   /** Internal use (e.g. AuthService) — just the auth section, with defaults already merged in. */
@@ -349,7 +370,7 @@ export class SettingsService {
     return new Promise((resolve, reject) => {
       const doc =
         type === 'certificate'
-          ? new PDFDocument({ layout: 'landscape', size: 'A4', margin: 0 })
+          ? new PDFDocument({ size: 'A4', margin: 0 })
           : new PDFDocument({ margin: 40, size: 'A4', bufferPages: true });
       const buffers: Buffer[] = [];
       doc.on('data', (chunk) => buffers.push(chunk));
@@ -359,16 +380,14 @@ export class SettingsService {
       let render: Promise<void>;
       if (type === 'certificate') {
         render = drawCertificate(doc, {
-          companyName: company.name,
-          companyTagline: all?.company?.tagline || 'Premier Academy for Multimedia & Computer Education',
-          logo: company.logo,
-          studentName: 'Student Name',
-          courseName: 'Advance Graphic Designing',
-          softwareCovered: 'Photoshop, Illustrator, Corel Draw',
+          ...certificateBranding(all),
+          studentName: 'Students Name',
+          courseName: 'Video Editing and Motion Graphics',
           issueDate: new Date(),
-          certificateId: 'GOG108#000103',
-          signatureName: all?.company?.signatoryName || 'Founder & CEO',
-          signatureImage: all?.general?.pdfCertificateSignature || undefined,
+          certificateId: 'GOG108-000103',
+          duration: '6 Months',
+          grade: 'A+',
+          specialization: 'Photoshop, Premiere Pro, After Effects',
         });
       } else if (type === 'registration') {
         render = drawRegistrationLetter(doc, {

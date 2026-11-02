@@ -220,7 +220,7 @@ export class ExamsService {
     return { success: true, data: { examId: id, questionIds: validIds } };
   }
 
-  async submitExam(studentId: number, dto: { examId: number; answers: { questionId: number; answer: string }[] }) {
+  async submitExam(studentId: number, dto: { examId: number; answers: { questionId: number; answer: string }[]; timeTakenSeconds?: number }) {
     const row = await this.prisma.exam.findUnique({
       where: { id: dto.examId },
       include: WITH_QUESTIONS,
@@ -238,6 +238,19 @@ export class ExamsService {
 
     const passed = totalScore >= exam.passingMarks;
 
+    // Time on this attempt: the app's own timer, else since the attempt's resume state was
+    // first saved. Never more than the exam's duration (plus a little submit latency).
+    const limit = exam.duration * 60 + 120;
+    let timeTaken = typeof dto.timeTakenSeconds === 'number' ? Math.round(dto.timeTakenSeconds) : null;
+    if (timeTaken === null) {
+      const started = await this.prisma.examProgress.findUnique({
+        where: { examId_studentId: { examId: dto.examId, studentId } },
+        select: { createdAt: true },
+      });
+      if (started) timeTaken = Math.round((Date.now() - started.createdAt.getTime()) / 1000);
+    }
+    const timeTakenSeconds = timeTaken === null ? null : Math.min(Math.max(timeTaken, 0), limit);
+
     const result = await this.prisma.examResult.create({
       data: {
         studentId,
@@ -246,6 +259,7 @@ export class ExamsService {
         maxScore: exam.totalMarks,
         passed,
         submitTime: new Date(),
+        timeTakenSeconds,
         answers: dto.answers ? dto.answers : undefined,
       },
     });

@@ -2,6 +2,28 @@ import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/commo
 import { PrismaService } from '../prisma/prisma.service';
 import { CertificatesService } from '../certificates/certificates.service';
 import { calculateProgressPercent, ProgressBreakdown } from './progress-calculator';
+import { courseLectures } from './course-lectures';
+
+/** Watching this share of a lecture marks it complete; skipping to the end doesn't. */
+const AUTO_COMPLETE_RATIO = 0.9;
+const MIN_COMPLETE_RATIO = 0.8;
+
+export type WatchSummary = { watchedSeconds: number; totalSeconds: number; percent: number };
+
+const UNIT_SECONDS: Record<string, number> = { minutes: 60, hours: 3600, days: 86400, weeks: 604800, months: 2592000 };
+
+/** Estimated Reading Time (value + unit from the course form) in seconds; 0 when not set. */
+function readingTimeSeconds(value: number, unit: string): number {
+  const per = UNIT_SECONDS[(unit || 'hours').toLowerCase()] ?? 3600;
+  return value > 0 ? Math.round(value * per) : 0;
+}
+
+/** Percent with one decimal below 10 (so 12 s of 45 h shows 0.1, not 0), whole numbers above. */
+function watchPercent(watched: number, total: number): number {
+  if (!total || watched <= 0) return 0;
+  const pct = Math.min(100, (watched / total) * 100);
+  return pct < 10 ? Math.max(0.1, Math.round(pct * 10) / 10) : Math.round(pct);
+}
 
 @Injectable()
 export class CourseProgressService {
@@ -71,6 +93,43 @@ export class CourseProgressService {
     };
   }
 
+  /**
+   * Actual time watched vs. total video length for a course. Each lecture counts at most its
+   * own duration (rewatching adds nothing past 100%); seeks never count (the client only
+   * reports continuous-playback deltas). Lectures whose length the course JSON doesn't know
+   * use the duration the player reported.
+   */
+  async getWatchSummary(studentId: number, courseId: number, course?: { modules: unknown; readingDurationValue: number; readingDurationUnit: string }): Promise<WatchSummary> {
+    const [c, rows] = await Promise.all([
+      course
+        ? Promise.resolve(course)
+        : this.prisma.course.findUnique({ where: { id: courseId }, select: { modules: true, readingDurationValue: true, readingDurationUnit: true } }),
+      this.prisma.lectureProgress.findMany({ where: { studentId, courseId } }),
+    ]);
+
+    // The admin's "Estimated Reading Time" is the course's total; every second watched counts
+    // toward it, rewatches included (5 videos × 2 h = 10 h of video can take 45 h of study).
+    const readingSeconds = readingTimeSeconds(c?.readingDurationValue ?? 0, c?.readingDurationUnit ?? 'hours');
+    if (readingSeconds > 0) {
+      const watchedSeconds = rows.reduce((sum, r) => sum + (r.totalWatchedSeconds || 0), 0);
+      return { watchedSeconds, totalSeconds: readingSeconds, percent: watchPercent(watchedSeconds, readingSeconds) };
+    }
+
+    // No reading time set: total = the videos' own length, each counted once.
+    const byId = new Map(rows.map((r) => [r.lectureId, r]));
+    let watchedSeconds = 0;
+    let totalSeconds = 0;
+    for (const lecture of courseLectures(courseId, c?.modules)) {
+      if (!['video', 'audio', 'youtube_live'].includes(lecture.type)) continue;
+      const row = byId.get(lecture.id);
+      const duration = lecture.duration || row?.durationSeconds || 0;
+      totalSeconds += duration;
+      if (row) watchedSeconds += duration ? Math.min(row.watchedSeconds, duration) : 0;
+    }
+    return { watchedSeconds, totalSeconds, percent: watchPercent(watchedSeconds, totalSeconds) };
+  }
+
+
   /** Enrollment + real weighted progress % for one student/course pair. */
   async getCourseProgressSummary(studentId: number, courseId: number) {
     const enrollment = await this.prisma.enrollment.findUnique({
@@ -80,12 +139,13 @@ export class CourseProgressService {
 
     if (!isEnrolled) {
       const breakdown = await this.getBreakdown(studentId, courseId);
-      return { isEnrolled: false, progressPercent: 0, breakdown, completedLessonIds: [] };
+      return { isEnrolled: false, progressPercent: 0, breakdown, completedLessonIds: [], watch: { watchedSeconds: 0, totalSeconds: 0, percent: 0 } };
     }
 
-    const [breakdown, progress] = await Promise.all([
+    const [breakdown, progress, watch] = await Promise.all([
       this.getBreakdown(studentId, courseId),
       this.prisma.courseProgress.findUnique({ where: { studentId_courseId: { studentId, courseId } } }),
+      this.getWatchSummary(studentId, courseId),
     ]);
     let completedLessonIds: string[] = [];
     if (progress?.completedLessons) {
@@ -95,7 +155,23 @@ export class CourseProgressService {
         completedLessonIds = [];
       }
     }
-    return { isEnrolled: true, progressPercent: calculateProgressPercent(breakdown), breakdown, completedLessonIds };
+    return { isEnrolled: true, progressPercent: calculateProgressPercent(breakdown), breakdown, completedLessonIds, watch };
+  }
+
+  /** Progress block attached to each `/courses/my/enrolled` row. */
+  async getEnrollmentProgress(studentId: number, courseId: number) {
+    const [breakdown, watch, record] = await Promise.all([
+      this.getBreakdown(studentId, courseId),
+      this.getWatchSummary(studentId, courseId),
+      this.prisma.courseProgress.findUnique({ where: { studentId_courseId: { studentId, courseId } }, select: { updatedAt: true } }),
+    ]);
+    return {
+      progressPercent: calculateProgressPercent(breakdown),
+      breakdown,
+      watch,
+      timeSpent: watch.watchedSeconds,
+      lastActivityAt: record?.updatedAt ?? null,
+    };
   }
 
   /** Every course the student is enrolled in and hasn't finished yet, for Home's "Continue Learning". */
@@ -112,10 +188,12 @@ export class CourseProgressService {
           where: { studentId_courseId: { studentId, courseId: enrollment.courseId } },
         });
         const breakdown = await this.getBreakdown(studentId, enrollment.courseId);
+        const watch = await this.getWatchSummary(studentId, enrollment.courseId, enrollment.course);
         return {
           course: enrollment.course,
           progressPercent: calculateProgressPercent(breakdown),
           breakdown,
+          watch,
           lastActivityAt: progressRecord?.updatedAt ?? enrollment.createdAt,
         };
       }),
@@ -137,6 +215,17 @@ export class CourseProgressService {
     });
     if (!isEnrolled) {
       throw new ForbiddenException('Not enrolled in this course');
+    }
+
+    // A lecture whose real watch time is known only completes once most of it was watched —
+    // the player fires "ended" after a seek to the end too. (Web reports no watch time, so
+    // lectures without a LectureProgress row are completed as before.)
+    const watched = await this.prisma.lectureProgress.findUnique({
+      where: { studentId_lectureId: { studentId, lectureId } },
+    });
+    if (watched?.durationSeconds && watched.watchedSeconds < watched.durationSeconds * MIN_COMPLETE_RATIO) {
+      const breakdown = await this.getBreakdown(studentId, courseId);
+      return { success: false, message: 'Watch more of this lecture to complete it', progressPercent: calculateProgressPercent(breakdown), breakdown };
     }
 
     // Find or create progress record
@@ -211,9 +300,13 @@ export class CourseProgressService {
 
     const record = await this.prisma.lectureProgress.upsert({
       where: { studentId_lectureId: { studentId, lectureId } },
-      create: { studentId, courseId, lectureId, watchedSeconds, durationSeconds: effectiveDuration },
-      update: { watchedSeconds, durationSeconds: effectiveDuration },
+      create: { studentId, courseId, lectureId, watchedSeconds, totalWatchedSeconds: Math.max(0, Math.round(deltaSeconds)), durationSeconds: effectiveDuration },
+      update: { watchedSeconds, totalWatchedSeconds: { increment: Math.max(0, Math.round(deltaSeconds)) }, durationSeconds: effectiveDuration },
     });
+
+    if (record.durationSeconds && record.watchedSeconds >= record.durationSeconds * AUTO_COMPLETE_RATIO) {
+      await this.completeLecture(studentId, courseId, lectureId).catch(() => undefined);
+    }
 
     return {
       watchedSeconds: record.watchedSeconds,

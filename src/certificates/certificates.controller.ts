@@ -3,7 +3,7 @@ import { CertificatesService } from './certificates.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
-import { IssueCertificateDto } from './dto/issue-certificate.dto';
+import { IssueCertificateDto, CertificateFieldsDto } from './dto/issue-certificate.dto';
 import { Response } from 'express';
 
 @Controller('certificates')
@@ -28,18 +28,43 @@ export class CertificatesController {
     return this.service.getCourseCertificate(req.user.id, parseInt(courseId, 10));
   }
 
+  /** Defaults + saved values for the admin's certificate Edit form. */
+  @Get('form/:studentId/:courseId')
+  @UseGuards(RolesGuard)
+  @Roles('admin')
+  async certificateForm(@Param('studentId') studentId: string, @Param('courseId') courseId: string) {
+    return this.service.getCertificateForm(parseInt(studentId, 10), parseInt(courseId, 10));
+  }
+
+  /** Preview with the Edit form's (unsaved) values. */
+  @Post('preview/:studentId/:courseId')
+  @UseGuards(RolesGuard)
+  @Roles('admin')
+  async previewWithFields(
+    @Param('studentId') studentId: string,
+    @Param('courseId') courseId: string,
+    @Body() fields: CertificateFieldsDto,
+    @Res() res: Response,
+  ) {
+    const pdf = await this.service.previewCertificate(parseInt(studentId, 10), parseInt(courseId, 10), fields);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'inline; filename="certificate-preview.pdf"');
+    res.send(pdf);
+  }
+
   @Get('preview/:studentId/:courseId')
   @UseGuards(RolesGuard)
   @Roles('admin')
   async previewCertificate(
     @Param('studentId') studentId: string,
     @Param('courseId') courseId: string,
+    @Res() res: Response,
   ) {
-    return this.service.issueCertificate({
-      studentId: parseInt(studentId, 10),
-      courseId: parseInt(courseId, 10),
-      force: true,
-    });
+    // Used to call issueCertificate(force) — "preview" silently issued a real certificate.
+    const pdf = await this.service.previewCertificate(parseInt(studentId, 10), parseInt(courseId, 10));
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'inline; filename="certificate-preview.pdf"');
+    res.send(pdf);
   }
 
   @Get(':id/download')

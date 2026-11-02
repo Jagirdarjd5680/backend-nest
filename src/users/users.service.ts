@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { CourseProgressService } from '../course-progress/course-progress.service';
 import { User } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import * as fs from 'fs';
@@ -52,6 +53,7 @@ export class UsersService {
     private recycleBinGateway: UsersRecycleBinGateway,
     private expoPushService: ExpoPushService,
     private notificationsService: NotificationsService,
+    private courseProgressService: CourseProgressService,
   ) {}
 
   async findByEmail(email: string): Promise<User | null> {
@@ -105,9 +107,20 @@ export class UsersService {
     const examTitleMap = new Map(examTitlesById.map((e) => [e.id, e.title]));
     const submittedAssignmentIdSet = new Set(submittedAssignmentIds.map((s) => s.assignmentId));
 
+    // Real progress (the same weighted % the certificate auto-issue uses) + watch time, and the
+    // certificate already issued for each course — both used to be hardcoded 0 / null.
+    const [progressByCourse, certificates] = await Promise.all([
+      Promise.all(courseIds.map((cid) => this.courseProgressService.getEnrollmentProgress(id, cid).then((p) => [cid, p] as const))),
+      this.prisma.certificate.findMany({ where: { userId: id, courseId: { in: courseIds } } }),
+    ]);
+    const progressMap = new Map(progressByCourse);
+    const certMap = new Map(certificates.map((c) => [c.courseId, c]));
+
     const coursesWithDetails = user.enrollments
       .filter((e) => e.course)
       .map((e) => {
+        const p = progressMap.get(e.courseId);
+        const cert = certMap.get(e.courseId);
         const courseExams = examsByCourseRaw.filter((ex) => ex.courseId === e.courseId);
         const courseAssignments = assignmentsByCourseRaw.filter((a) => a.courseId === e.courseId);
         return {
@@ -116,11 +129,13 @@ export class UsersService {
           title: e.course.title,
           thumbnail: e.course.thumbnail,
           price: e.course.price,
-          progress: 0,
+          progress: p?.progressPercent ?? 0,
+          breakdown: p?.breakdown ?? null,
+          watch: p?.watch ?? null,
           paymentProgress: 100,
           activationDate: e.createdAt,
           expiryDate: null,
-          certificate: null,
+          certificate: cert ? { ...cert, _id: cert.id.toString() } : null,
           examCount: courseExams.length,
           examsAttempted: courseExams.filter((ex) => attemptedExamIds.has(ex.id)).length,
           assignmentCount: courseAssignments.length,

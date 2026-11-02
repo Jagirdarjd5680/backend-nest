@@ -29,7 +29,18 @@ if (ffmpegInstaller && ffmpegInstaller.path) {
 // main.ts; point it at nginx or a CDN (e.g. https://cdn.example.com/hls-seg) to take segment
 // traffic off Node entirely.
 const SEGMENT_BASE_URL = (process.env.HLS_SEGMENT_BASE_URL || '/hls-seg').replace(/\/$/, '');
+// Fast start: 5 s segments for the first 120 s (the first frame waits on one small segment),
+// then normal 15 s segments. Keep in sync with local_agent/src/ffmpeg.js.
+const HLS_FAST_SECONDS = 5;
+const HLS_FAST_WINDOW = 120;
 const HLS_SEGMENT_SECONDS = 15;
+/** Keyframe at every segment boundary of that layout — identical for every quality, so they stay aligned. */
+const HLS_KEYFRAMES = `expr:if(lt(t,${HLS_FAST_WINDOW}),gte(t,n_forced*${HLS_FAST_SECONDS}),gte(t,${HLS_FAST_WINDOW}+(n_forced-${HLS_FAST_WINDOW / HLS_FAST_SECONDS})*${HLS_SEGMENT_SECONDS}))`;
+/** Segments a video of `duration` seconds is cut into. */
+const hlsSegmentCount = (duration: number) =>
+  duration <= HLS_FAST_WINDOW
+    ? Math.ceil(duration / HLS_FAST_SECONDS)
+    : HLS_FAST_WINDOW / HLS_FAST_SECONDS + Math.ceil((duration - HLS_FAST_WINDOW) / HLS_SEGMENT_SECONDS);
 
 /**
  * Quality ladder. `short` is the short side in px (height for landscape, width for portrait).
@@ -103,16 +114,20 @@ export class MediaService {
   }
 
   async issueToken(videoId: string, userId: number) {
+    const started = Date.now();
     if (!(await this.hlsSecurity.canAccess(userId, videoId))) {
       throw new ForbiddenException('You do not have access to this video');
     }
+    const accessMs = Date.now() - started; // first call per user+video runs the DB checks; then cached 5 min
     const encrypted = this.hlsSecurity.isEncrypted(videoId);
     const ttl = encrypted ? ENCRYPTED_PLAY_TOKEN_TTL : LEGACY_PLAY_TOKEN_TTL;
     const token = this.hlsSecurity.sign('hls-play', userId, videoId, ttl);
-    console.log(`🎫 [Video] Token issued videoId=${videoId} user=${userId} encrypted=${encrypted}`);
 
     // Manual quality picker (mobile app): direct links to each quality's playlist.
     const qualities = await this.listQualities(videoId);
+    console.log(
+      `🎫 [Video] Token issued videoId=${videoId} user=${userId} encrypted=${encrypted} in ${Date.now() - started}ms (access check ${accessMs}ms)`,
+    );
     const variantToken = qualities.length ? this.hlsSecurity.sign('hls-play', userId, videoId, VARIANT_TOKEN_TTL) : '';
     const resolutions = qualities.map((q) => ({ label: q, url: this.variantUrl(videoId, q, variantToken) }));
 
@@ -162,7 +177,7 @@ export class MediaService {
    */
   private rewriteMasterPlaylist(content: string, videoId: string, userId: number): string {
     const variantToken = this.hlsSecurity.sign('hls-play', userId, videoId, VARIANT_TOKEN_TTL);
-    return content
+    return this.lowestQualityFirst(content)
       .split(/\r?\n/)
       .map((line) => {
         const trimmed = line.trim();
@@ -171,6 +186,34 @@ export class MediaService {
         return QUALITY_NAME.test(quality) ? this.variantUrl(videoId, quality, variantToken) : line;
       })
       .join('\n');
+  }
+
+  /**
+   * ExoPlayer starts on the FIRST variant listed and only then adapts. Masters were written
+   * 720p-first, so the first frame waited on a whole 720p segment (~3.5 MB for a 15 s chunk);
+   * listing the lightest quality first starts playback almost at once, and ABR climbs to
+   * 720p/1080p within a few segments on a good connection. Applies to every existing video.
+   */
+  private lowestQualityFirst(content: string): string {
+    const lines = content.split(/\r?\n/);
+    const head: string[] = [];
+    const variants: { bw: number; lines: string[] }[] = [];
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (line.startsWith('#EXT-X-STREAM-INF') && i + 1 < lines.length) {
+        // By height: the VPS converter's BANDWIDTH values aren't reliable (720p and 1080p equal).
+        const height = Number(/RESOLUTION=\d+x(\d+)/.exec(line)?.[1] ?? 0);
+        const bw = height || Number(/BANDWIDTH=(\d+)/.exec(line)?.[1] ?? Number.MAX_SAFE_INTEGER);
+        variants.push({ bw, lines: [line, lines[++i]] });
+      } else if (variants.length === 0) {
+        head.push(line);
+      } else if (line.trim()) {
+        return content; // something after the variants we don't understand — leave it as is
+      }
+    }
+    if (variants.length < 2) return content;
+    variants.sort((a, b) => a.bw - b.bw);
+    return [...head, ...variants.flatMap((v) => v.lines), ''].join('\n');
   }
 
   private async renderPlaylist(content: string, videoId: string, viewer: { token?: string; userId?: number }, quality?: string) {
@@ -216,7 +259,7 @@ export class MediaService {
         const tsFiles = this.countSegments(outputDir);
         if (tsFiles > 0) {
           if (duration > 0) {
-            const expectedChunks = Math.ceil(duration / 15) * (this.hlsRungCountMap.get(videoId) || 1);
+            const expectedChunks = hlsSegmentCount(duration) * (this.hlsRungCountMap.get(videoId) || 1);
             diskPct = Math.round((tsFiles / Math.max(expectedChunks, 1)) * 100);
           } else {
             diskPct = Math.min(tsFiles * 15, 98);
@@ -424,12 +467,14 @@ export class MediaService {
         '-crf', '23',
         '-maxrate', `${r.maxrateK}k`,
         '-bufsize', `${r.maxrateK * 2}k`,
-        // Keyframe exactly at every segment boundary: even 15s chunks, aligned across qualities
-        // so switching quality mid-video is seamless.
+        // Keyframes only at the segment boundaries (no scene cuts; GOP longer than any segment),
+        // aligned across qualities so switching quality mid-video is seamless. hls_time is the
+        // short length: ffmpeg cuts at the first keyframe past it, i.e. 5 s early on, 15 s after.
         '-sc_threshold', '0',
-        '-force_key_frames', `expr:gte(t,n_forced*${HLS_SEGMENT_SECONDS})`,
+        '-g', '2000',
+        '-force_key_frames', HLS_KEYFRAMES,
         '-f', 'hls',
-        '-hls_time', String(HLS_SEGMENT_SECONDS),
+        '-hls_time', String(HLS_FAST_SECONDS),
         '-hls_list_size', '0',
         '-hls_playlist_type', 'vod',
         '-start_number', '0',
@@ -453,7 +498,7 @@ export class MediaService {
           } else if (fs.existsSync(outputDir)) {
             const tsFiles = this.countSegments(outputDir);
             if (totalDurationSec > 0) {
-              const expectedChunks = Math.ceil(totalDurationSec / 15) * rungs.length;
+              const expectedChunks = hlsSegmentCount(totalDurationSec) * rungs.length;
               pct = Math.round((tsFiles / Math.max(expectedChunks, 1)) * 100);
             } else {
               pct = Math.min(tsFiles * 15, 98);

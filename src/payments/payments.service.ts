@@ -12,10 +12,14 @@ import Razorpay = require('razorpay');
 import { CreateOrderDto } from './dto/create-order.dto';
 import { VerifyPaymentDto } from './dto/verify-payment.dto';
 import { Platform, assertCoursePlatformAccess } from '../common/platform';
+import { ExpoPushService } from '../notifications/expo-push.service';
 
 @Injectable()
 export class PaymentsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private expoPushService: ExpoPushService,
+  ) {}
 
   /**
    * Admin's Settings > Payments page (frontend/src/pages/Settings/PaymentSettings.jsx)
@@ -237,29 +241,11 @@ export class PaymentsService {
       },
       update: {},
     });
+    void this.sendPurchasePush(userId, courseId);
 
-    // Referral reward logic (Step 6)
-    try {
-      const referral = await this.prisma.referral.findFirst({
-        where: { referredId: userId, status: 'pending' },
-      });
-      if (referral) {
-        const rewardAmount = Math.round(Number(payment?.amount || 100) * 0.1); // 10% reward
-        await this.prisma.$transaction([
-          this.prisma.user.update({
-            where: { id: referral.referrerId },
-            data: { walletBalance: { increment: rewardAmount } },
-          }),
-          this.prisma.referral.update({
-            where: { id: referral.id },
-            data: { status: 'rewarded', rewardAmount },
-          }),
-        ]);
-        console.log(`[PaymentsService] Rewarded ₹${rewardAmount} to referrer #${referral.referrerId}`);
-      }
-    } catch (err) {
-      console.error('[PaymentsService] Referral reward processing failed:', err.message);
-    }
+    // Referral rewards are no longer automatic: the referral stays "pending" (Process) and the
+    // admin marks it Completed on /referral-records, which credits the points set in
+    // App Settings → Referral Rewards (the old 10%-of-payment wallet credit is gone).
 
     return {
       success: true,
@@ -321,11 +307,27 @@ export class PaymentsService {
     return item;
   }
 
+  /** "Congratulations" push once a purchase is verified — fire-and-forget, never blocks verification. */
+  private async sendPurchasePush(userId: number, courseId: number) {
+    try {
+      const course = await this.prisma.course.findUnique({ where: { id: courseId }, select: { title: true } });
+      await this.expoPushService.sendToUser(
+        userId,
+        'Congratulations! \u{1F389}',
+        `You're enrolled in ${course?.title?.trim() || 'your new course'}. Start learning now!`,
+        { type: 'course_purchased', courseId: String(courseId) },
+      );
+    } catch {
+      // a failed push must not affect the purchase
+    }
+  }
+
   async findByUser(userId: number) {
     return this.prisma.payment.findMany({
       where: { userId },
       include: {
-        course: true,
+        // Only what a receipt shows — the full course row carries the whole curriculum JSON.
+        course: { select: { id: true, title: true, thumbnail: true } },
       },
       orderBy: { createdAt: 'desc' },
     });

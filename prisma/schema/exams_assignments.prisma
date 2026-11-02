@@ -29,6 +29,8 @@ model ExamResult {
   maxScore   Float    @default(100)
   passed     Boolean  @default(false)
   submitTime DateTime @default(now())
+  /// Seconds the student spent on this attempt; null for attempts saved before it was tracked.
+  timeTakenSeconds Int?
   answers    Json?
   createdAt  DateTime @default(now())
 

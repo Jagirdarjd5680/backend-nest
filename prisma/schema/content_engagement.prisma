@@ -110,6 +110,14 @@ model Certificate {
   pdfUrl        String   @default("")
   issueDate     DateTime @default(now())
 
+  /// Set from the admin's certificate Edit form; null = the live value (current student name,
+  /// course title, reading time, exam-based grade).
+  studentName    String?
+  courseName     String?
+  duration       String?
+  grade          String?
+  specialization String?
+
   userId   Int
   user     User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   courseId Int?

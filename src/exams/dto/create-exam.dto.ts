@@ -58,6 +58,11 @@ export class SubmitExamDto {
   @IsArray()
   @IsNotEmpty()
   answers: { questionId: number; answer: string }[];
+
+  /** Seconds from opening the exam to submitting (client timer); clamped server-side. */
+  @IsOptional()
+  @IsNumber()
+  timeTakenSeconds?: number;
 }
 
 export class SubmitExamResultDto {

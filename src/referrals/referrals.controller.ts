@@ -121,6 +121,23 @@ export class ReferralsController {
     );
   }
 
+  // GET /api/referrals/admin/user/:userId — one student's whole referral history (admin user modal).
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @Get('admin/user/:userId')
+  async getAdminUserReferrals(@Param('userId') userId: string) {
+    return this.service.getAdminUserReferrals(parseInt(userId, 10));
+  }
+
+  // GET /api/referrals/admin/records/:id — everything behind one referral (both people,
+  // join request, purchases, reward, timeline) for the admin "view" dialog.
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @Get('admin/records/:id')
+  async getAdminReferralDetails(@Param('id') id: string) {
+    return this.service.getAdminReferralDetails(parseInt(id, 10));
+  }
+
   // GET /api/referrals/admin/all
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin')

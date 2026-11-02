@@ -9,12 +9,14 @@ import { RequireModulePermission } from '../auth/module-permissions.decorator';
 import { CreateCourseDto } from './dto/create-course.dto';
 import { UpdateCourseDto } from './dto/update-course.dto';
 import { normalizePlatform } from '../common/platform';
+import { CourseProgressService } from '../course-progress/course-progress.service';
 
 @Controller('courses')
 export class CoursesController {
   constructor(
     private coursesService: CoursesService,
     private reviewsService: ReviewsService,
+    private progressService: CourseProgressService,
   ) {}
 
   // Public course catalog — intentionally unguarded, browsable while logged out.
@@ -28,7 +30,12 @@ export class CoursesController {
   @UseGuards(JwtAuthGuard)
   @Get('my/enrolled')
   async findMyEnrollments(@Request() req: any) {
-    const data = await this.coursesService.findMyEnrollments(Number(req.user.id || req.user._id));
+    const userId = Number(req.user.id || req.user._id);
+    const rows = await this.coursesService.findMyEnrollments(userId);
+    // Home's Continue Learning / My Courses read `progress` off each row — it used to be absent (always 0%).
+    const data = await Promise.all(
+      rows.map(async (row) => ({ ...row, progress: await this.progressService.getEnrollmentProgress(userId, row.courseId) })),
+    );
     return { success: true, data };
   }
 

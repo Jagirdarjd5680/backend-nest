@@ -1,13 +1,35 @@
 import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { Platform, assertCoursePlatformAccess } from '../common/platform';
+import { withLectureIds, withoutLectureIds } from '../course-progress/course-lectures';
+import { ExpoPushService } from '../notifications/expo-push.service';
 
 @Injectable()
 export class CoursesService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private expoPushService: ExpoPushService,
+  ) {}
+
+  /** Real review numbers per course — the app's cards/headers read `rating` + `reviewCount`. */
+  private async reviewStats(courseIds: number[]) {
+    if (!courseIds.length) return new Map<number, { rating: number; reviewCount: number }>();
+    const rows = await this.prisma.review.groupBy({
+      by: ['courseId'],
+      where: { courseId: { in: courseIds } },
+      _avg: { rating: true },
+      _count: { _all: true },
+    });
+    return new Map(rows.map((r) => [r.courseId, { rating: Math.round((r._avg.rating ?? 0) * 10) / 10, reviewCount: r._count._all }]));
+  }
+
+  private withReviewStats<T extends { id: number }>(course: T, stats: Map<number, { rating: number; reviewCount: number }>) {
+    const s = stats.get(course.id) ?? { rating: 0, reviewCount: 0 };
+    return { ...course, rating: s.rating, reviewCount: s.reviewCount, totalReviews: s.reviewCount };
+  }
 
   async findAll() {
-    return this.prisma.course.findMany({
+    const courses = await this.prisma.course.findMany({
       include: {
         category: {
           select: {
@@ -36,6 +58,8 @@ export class CoursesService {
         createdAt: 'desc',
       },
     });
+    const stats = await this.reviewStats(courses.map((c) => c.id));
+    return courses.map((c) => this.withReviewStats(c, stats));
   }
 
   /**
@@ -64,7 +88,8 @@ export class CoursesService {
       throw new NotFoundException(`Course with ID ${id} not found`);
     }
     assertCoursePlatformAccess(course.platformAccess, platform ?? null);
-    return course;
+    const stats = await this.reviewStats([course.id]);
+    return this.withReviewStats({ ...course, modules: withLectureIds(course.id, course.modules) as typeof course.modules }, stats);
   }
 
   /** Displayed like count = the admin-seeded fakeLikes baseline + real per-user likes. */
@@ -272,11 +297,20 @@ export class CoursesService {
       throw new ForbiddenException('This course must be purchased before enrolling');
     }
 
+    const existing = await this.prisma.enrollment.findUnique({ where: { userId_courseId: { userId, courseId } } });
     const enrollment = await this.prisma.enrollment.upsert({
       where: { userId_courseId: { userId, courseId } },
       create: { userId, courseId },
       update: {},
     });
+    if (!existing) {
+      this.expoPushService
+        .sendToUser(userId, 'Congratulations! \u{1F389}', `You're enrolled in ${course.title.trim()}. Start learning now!`, {
+          type: 'course_purchased',
+          courseId: String(courseId),
+        })
+        .catch(() => {});
+    }
 
     return enrollment;
   }
@@ -288,7 +322,7 @@ export class CoursesService {
       orderBy: { createdAt: 'desc' },
       include: {
         course: {
-          select: { id: true, title: true, thumbnail: true, price: true },
+          select: { id: true, title: true, thumbnail: true, price: true, category: { select: { id: true, name: true } } },
         },
       },
     });
@@ -326,7 +360,8 @@ export class CoursesService {
         courseType: original.courseType,
         allowOtherBatchMaterials: original.allowOtherBatchMaterials,
         platformAccess: original.platformAccess,
-        modules: original.modules ? original.modules : [],
+        // Lecture ids are per course — the copy gets fresh ones (its watch progress starts empty).
+        modules: (withoutLectureIds(original.modules) ?? []) as any,
         categoryId: original.categoryId,
         instructorId: original.instructorId,
       },

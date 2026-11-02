@@ -24,6 +24,9 @@ function startOfDay(date: Date): Date {
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
+/** Students who can appear on a leaderboard: real, current accounts (not archived/deactivated/blocked). */
+const RANKABLE = { role: 'student', isActive: true, isDeleted: false, isBlocked: false } as const;
+
 @Injectable()
 export class GamificationService {
   private readonly logger = new Logger(GamificationService.name);
@@ -64,39 +67,62 @@ export class GamificationService {
   }
 
   /**
-   * Runs daily at 8 PM IST — anyone with a live streak who hasn't logged in yet today
-   * gets a Duolingo-style warning push before the streak actually breaks at midnight IST.
-   * Pinned to Asia/Kolkata explicitly so this stays correct regardless of the server host's
-   * own local timezone (which is what `startOfDay` above also had to correct for).
+   * Streak reminders at 7 PM and 9 PM IST to every student who hasn't opened the app today.
+   * Opening the app (POST /gamification/check-in) stamps lastActiveDate, so someone who
+   * reacts to the 7 PM push never gets the 9 PM one. Pinned to Asia/Kolkata so it stays
+   * correct regardless of the server host's own timezone.
    */
-  @Cron('0 20 * * *', { timeZone: 'Asia/Kolkata' })
-  async warnUsersAtRiskOfBreakingStreak() {
+  @Cron('0 19 * * *', { timeZone: 'Asia/Kolkata' })
+  async eveningStreakReminder() {
+    return this.remindInactiveStudents(false);
+  }
+
+  @Cron('0 21 * * *', { timeZone: 'Asia/Kolkata' })
+  async lastCallStreakReminder() {
+    return this.remindInactiveStudents(true);
+  }
+
+  async remindInactiveStudents(lastCall: boolean) {
     const today = startOfDay(new Date());
+    const yesterday = new Date(today.getTime() - ONE_DAY_MS);
     const candidates = await this.prisma.user.findMany({
-      where: { role: 'student', isActive: true, isDeleted: false, currentStreak: { gt: 0 }, expoPushToken: { not: null } },
-      select: { id: true, lastActiveDate: true },
+      where: {
+        role: 'student',
+        isActive: true,
+        isDeleted: false,
+        expoPushToken: { not: null },
+        OR: [{ lastActiveDate: null }, { lastActiveDate: { lt: today } }],
+      },
+      select: { id: true, currentStreak: true, lastActiveDate: true },
     });
 
-    const atRisk = candidates.filter((u) => !u.lastActiveDate || startOfDay(u.lastActiveDate).getTime() !== today.getTime());
-
-    for (const u of atRisk) {
-      await this.expoPushService
-        .sendToUser(
-          u.id,
-          "Don't lose your streak! \u{1F525}",
-          "You're missing today's lecture — your streak will break tonight!",
-          { type: 'streak_warning' },
-        )
-        .catch(() => {});
+    for (const u of candidates) {
+      // A streak is still alive tonight only if the last visit was yesterday.
+      const alive = u.currentStreak > 0 && !!u.lastActiveDate && u.lastActiveDate >= yesterday;
+      const [title, body] = alive
+        ? lastCall
+          ? [`Last chance! Your ${u.currentStreak}-day streak ends at midnight \u{1F525}`, 'Open GOG and watch a lecture to keep it alive.']
+          : [`Keep your ${u.currentStreak}-day streak going \u{1F525}`, "You haven't learned today yet — a few minutes is enough."]
+        : lastCall
+          ? ["Your day isn't over yet \u{1F4DA}", 'Open GOG now and start a new learning streak tonight.']
+          : ['Time to learn something new \u{1F3A8}', 'Start a learning streak today — open GOG and pick up a lecture.'];
+      await this.expoPushService.sendToUser(u.id, title, body, { type: 'streak_warning' }).catch(() => {});
     }
 
-    this.logger.log(`Streak-break warning sent to ${atRisk.length} user(s)`);
-    return { warned: atRisk.length };
+    this.logger.log(`Streak reminder (${lastCall ? '9 PM' : '7 PM'}) sent to ${candidates.length} user(s)`);
+    return { reminded: candidates.length };
+  }
+
+  /** Current streak as of today: a streak whose last day is before yesterday has already broken. */
+  private liveStreak(currentStreak: number, lastActiveDate: Date | null) {
+    if (!lastActiveDate || !currentStreak) return 0;
+    const yesterday = startOfDay(new Date()).getTime() - ONE_DAY_MS;
+    return startOfDay(lastActiveDate).getTime() >= yesterday ? currentStreak : 0;
   }
 
   async getLeaderboard(limit: number = 20) {
     const students = await this.prisma.user.findMany({
-      where: { role: 'student', isActive: true, isDeleted: false },
+      where: RANKABLE,
       select: {
         id: true,
         name: true,
@@ -131,9 +157,9 @@ export class GamificationService {
   /** Matches frontend/src/pages/Leaderboard/Leaderboard.jsx's expected `{ success, data }' shape. */
   async getLeaderboardByPoints(limit: number = 20) {
     const students = await this.prisma.user.findMany({
-      where: { role: 'student', isActive: true, isDeleted: false },
+      where: { ...RANKABLE, points: { gt: 0 } },
       select: { id: true, name: true, avatar: true, points: true, rollNumber: true },
-      orderBy: { points: 'desc' },
+      orderBy: [{ points: 'desc' }, { id: 'asc' }],
       take: limit,
     });
 
@@ -151,9 +177,10 @@ export class GamificationService {
 
   async getLeaderboardByStreaks(limit: number = 20) {
     const students = await this.prisma.user.findMany({
-      where: { role: 'student', isActive: true, isDeleted: false, currentStreak: { gt: 0 } },
+      // Only live streaks — a streak whose last visit is before yesterday has already broken.
+      where: { ...RANKABLE, currentStreak: { gt: 0 }, lastActiveDate: { gte: new Date(startOfDay(new Date()).getTime() - ONE_DAY_MS) } },
       select: { id: true, name: true, avatar: true, points: true, currentStreak: true, longestStreak: true, rollNumber: true },
-      orderBy: { currentStreak: 'desc' },
+      orderBy: [{ currentStreak: 'desc' }, { longestStreak: 'desc' }],
       take: limit,
     });
 
@@ -178,10 +205,7 @@ export class GamificationService {
     if (!user) throw new NotFoundException(`User ${userId} not found`);
 
     const higherRankCount = await this.prisma.user.count({
-      where: {
-        role: 'student',
-        points: { gt: user.points },
-      },
+      where: { ...RANKABLE, points: { gt: user.points } },
     });
 
     const rank = higherRankCount + 1;
@@ -200,7 +224,7 @@ export class GamificationService {
       rank,
       badges,
       streaks: {
-        current: user.currentStreak || 0,
+        current: this.liveStreak(user.currentStreak, user.lastActiveDate),
         longest: user.longestStreak || 0,
         lastActiveDate: user.lastActiveDate,
       },

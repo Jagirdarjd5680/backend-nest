@@ -145,9 +145,9 @@ export class AssignmentsService {
       orderBy: { submittedAt: 'desc' },
       include: {
         student: {
-          select: { id: true, name: true, email: true, avatar: true },
+          select: { id: true, name: true, email: true, avatar: true, rollNumber: true },
         },
-        assignment: true,
+        assignment: { select: { id: true, title: true, totalMarks: true, courseId: true } },
       },
     });
 
@@ -156,6 +156,10 @@ export class AssignmentsService {
       id: sub.id,
       student: sub.student ? { ...sub.student, _id: sub.student.id.toString() } : null,
       assignment: sub.assignment ? { ...sub.assignment, _id: sub.assignment.id.toString() } : null,
+      // Flat copies for the header bell + dashboard widget, which read these names directly.
+      studentName: sub.student?.name ?? 'Deleted student',
+      studentImage: sub.student?.avatar ?? '',
+      assignmentTitle: sub.assignment?.title ?? '',
       fileUrl: sub.fileUrl,
       textAnswer: sub.textAnswer,
       quizAnswers: sub.quizAnswers,

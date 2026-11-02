@@ -44,6 +44,65 @@ export class ExamResultsService {
       .sort((a: any, b: any) => a.title.localeCompare(b.title));
   }
 
+  /**
+   * Student-facing results: one entry per exam taken, each with all its attempts (oldest =
+   * attempt 1). Deliberately no answers / correctness — only marks, pass/fail and timing.
+   */
+  async findMine(studentId: number) {
+    const rows = await this.prisma.examResult.findMany({
+      where: { studentId },
+      orderBy: { submitTime: 'asc' },
+      select: {
+        id: true,
+        score: true,
+        maxScore: true,
+        passed: true,
+        submitTime: true,
+        timeTakenSeconds: true,
+        exam: { select: { id: true, title: true, duration: true, totalMarks: true, passingMarks: true, courseId: true } },
+      },
+    });
+
+    const byExam = new Map<number, any>();
+    for (const r of rows) {
+      if (!r.exam) continue;
+      let entry = byExam.get(r.exam.id);
+      if (!entry) {
+        entry = {
+          examId: r.exam.id,
+          _id: r.exam.id.toString(),
+          title: r.exam.title,
+          duration: r.exam.duration,
+          totalMarks: r.exam.totalMarks,
+          passingMarks: r.exam.passingMarks,
+          courseId: r.exam.courseId,
+          attempts: [] as any[],
+        };
+        byExam.set(r.exam.id, entry);
+      }
+      const max = r.maxScore || r.exam.totalMarks || 0;
+      entry.attempts.push({
+        id: r.id,
+        _id: r.id.toString(),
+        attempt: entry.attempts.length + 1,
+        score: r.score,
+        maxScore: max,
+        percent: max > 0 ? Math.round((r.score / max) * 100) : 0,
+        passed: r.passed,
+        submittedAt: r.submitTime,
+        timeTakenSeconds: r.timeTakenSeconds,
+      });
+    }
+
+    return [...byExam.values()]
+      .map((e) => {
+        const best = e.attempts.reduce((a: any, b: any) => (b.score > a.score ? b : a));
+        const last = e.attempts[e.attempts.length - 1];
+        return { ...e, attemptCount: e.attempts.length, bestScore: best.score, bestPercent: best.percent, passed: e.attempts.some((a: any) => a.passed), lastAttemptAt: last.submittedAt, attempts: [...e.attempts].reverse() };
+      })
+      .sort((a, b) => new Date(b.lastAttemptAt).getTime() - new Date(a.lastAttemptAt).getTime());
+  }
+
   async findDetails(id: number) {
     const result = await this.prisma.examResult.findUnique({
       where: { id },

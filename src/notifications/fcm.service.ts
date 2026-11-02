@@ -11,7 +11,7 @@ const ANDROID_CHANNEL_ID = 'gog_default';
 
 /** Heads-up delivery on Android, sound on iOS — shared by every send. */
 const PLATFORM_OPTIONS = {
-  android: { priority: 'high', notification: { channelId: ANDROID_CHANNEL_ID, sound: 'default' } },
+  android: { priority: 'high', notification: { channelId: ANDROID_CHANNEL_ID, sound: 'default', icon: 'ic_notification', color: '#C40C0C' } },
   apns: { payload: { aps: { sound: 'default' } } },
 } as const;
 
