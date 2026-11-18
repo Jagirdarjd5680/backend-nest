@@ -10,7 +10,27 @@ export interface InvoiceCompany {
   phone?: string;
   email?: string;
   logo?: string; // data URI, http(s) URL, or a local /uploads/... path
+  /** Table header / total box background (Settings > PDF Formats > Table colour). */
   primaryColor?: string;
+  /** Text drawn on top of that background (Settings > PDF Formats > Table text colour). */
+  tableTextColor?: string;
+}
+
+export const DEFAULT_PDF_TABLE_COLOR = '#3f51b5'; // blue
+export const DEFAULT_PDF_TABLE_TEXT_COLOR = '#ffffff';
+
+const isHex = (v: unknown): v is string => typeof v === 'string' && /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(v.trim());
+
+/**
+ * The two colours every receipt / invoice / registration letter uses, from Settings > PDF Formats
+ * (`pdfSettings.tableColor`, `pdfSettings.tableTextColor`). One place, so every PDF the app makes
+ * - admin download, student download, e-mail, demo preview - looks the same.
+ */
+export function pdfColors(pdfSettings: any): { primaryColor: string; tableTextColor: string } {
+  return {
+    primaryColor: isHex(pdfSettings?.tableColor) ? pdfSettings.tableColor.trim() : DEFAULT_PDF_TABLE_COLOR,
+    tableTextColor: isHex(pdfSettings?.tableTextColor) ? pdfSettings.tableTextColor.trim() : DEFAULT_PDF_TABLE_TEXT_COLOR,
+  };
 }
 
 export interface InvoiceBillTo {
@@ -61,7 +81,8 @@ async function loadLogo(logo?: string): Promise<Buffer | string | null> {
  */
 export async function drawInvoice(doc: PDFKit.PDFDocument, data: InvoiceData): Promise<void> {
   registerFonts(doc);
-  const primary = data.company.primaryColor || '#f39c12';
+  const primary = data.company.primaryColor || DEFAULT_PDF_TABLE_COLOR;
+  const onPrimary = data.company.tableTextColor || DEFAULT_PDF_TABLE_TEXT_COLOR;
   // No caller-specified rate means the course's GST setting is "none" — show a plain invoice
   // with no GST split at all, rather than silently defaulting to some rate the course was
   // never configured for.
@@ -139,7 +160,7 @@ export async function drawInvoice(doc: PDFKit.PDFDocument, data: InvoiceData): P
   doc.rect(40, tableTop, 515, 24).fill(primary);
   let curX = 40;
   headers.forEach((h, i) => {
-    doc.fillColor('#fff').font(FONT_BOLD).fontSize(8).text(h, curX + 4, tableTop + 8, { width: colW[i] - 8, align: i === 1 ? 'left' : 'center' });
+    doc.fillColor(onPrimary).font(FONT_BOLD).fontSize(8).text(h, curX + 4, tableTop + 8, { width: colW[i] - 8, align: i === 1 ? 'left' : 'center' });
     curX += colW[i];
   });
 
@@ -191,7 +212,7 @@ export async function drawInvoice(doc: PDFKit.PDFDocument, data: InvoiceData): P
   }
 
   doc.rect(calcX, calcY, 200, 26).fill(primary);
-  doc.fillColor('#fff').font(FONT_BOLD).fontSize(10.5);
+  doc.fillColor(onPrimary).font(FONT_BOLD).fontSize(10.5);
   doc.text('Total', calcX + 10, calcY + 7, { width: 90 });
   doc.text(formatRupees(data.totalAmount), calcX + 100, calcY + 7, { width: 90, align: 'right' });
   calcY += 26;

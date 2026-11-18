@@ -132,6 +132,8 @@ model Event {
   description String   @db.Text
   date        DateTime
   price       Float    @default(0)
+  /// Cover image shown on the event card (uploaded from the admin form).
+  thumbnail   String?
   createdAt   DateTime @default(now())
 
   bookings EventBooking[]
@@ -156,6 +158,9 @@ model EventBooking {
   razorpayPaymentId String?
   amountPaid        Float     @default(0)
   ticketEmailedAt   DateTime?
+  // Set once when the ticket QR is scanned at the door (admin/teacher scanner) — a second scan is rejected.
+  checkedInAt       DateTime?
+  checkedInById     Int?
 
   @@map("event_bookings")
 }

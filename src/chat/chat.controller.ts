@@ -2,7 +2,7 @@ import { Controller, Get, Post, Put, Delete, Body, Param, UseGuards, UseIntercep
 import { FileInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
 import { join } from 'path';
-import { existsSync, mkdirSync } from 'fs';
+import { existsSync, mkdirSync, unlinkSync } from 'fs';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { ModulePermissionsGuard } from '../auth/module-permissions.guard';
 import { RequireModulePermission } from '../auth/module-permissions.decorator';
@@ -87,7 +87,19 @@ export class ChatController {
     // `dto.image` stays available for callers that pass an already-hosted URL instead.
     if (file) dto.image = `/uploads/chat/${file.filename}`;
     console.log(`[ChatController] POST /chat/send from ${senderId} (${senderRole}) to ${dto.receiver}${file ? ' with image' : ''}`);
-    return this.chatService.sendMessage(dto, senderId, senderRole);
+    try {
+      return await this.chatService.sendMessage(dto, senderId, senderRole);
+    } catch (err) {
+      // Rejected (blocked, images not allowed, spam throttle ...): don't leave the upload on disk.
+      if (file?.path) {
+        try {
+          unlinkSync(file.path);
+        } catch {
+          // already gone
+        }
+      }
+      throw err;
+    }
   }
 
   @RequireModulePermission('chat', 'view')
@@ -116,6 +128,14 @@ export class ChatController {
     const currentUserId = Number(req.user.id || req.user._id);
     const targetUserId = parseInt(userId, 10);
     return this.chatService.clearChatForMe(targetUserId, currentUserId);
+  }
+
+  /** Admin switch: may this user send images in chat? Body `{ allowed: boolean }`; omit to flip. */
+  @UseGuards(RolesGuard)
+  @Roles('admin')
+  @Put('image-permission/:userId')
+  async setImagePermission(@Param('userId') userId: string, @Body() body: { allowed?: boolean }) {
+    return this.chatService.setImagePermission(parseInt(userId, 10), typeof body?.allowed === 'boolean' ? body.allowed : undefined);
   }
 
   @UseGuards(RolesGuard)

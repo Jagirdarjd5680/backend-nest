@@ -50,6 +50,16 @@ model User {
   // Chat-specific block (admin toggles from the chat header's three-dot menu) —
   // separate from `isBlocked`, which is the whole-account ban.
   isBlockedFromChat       Boolean   @default(false)
+  /// Chat: may this user send images in the 1:1 chat with the admin? Off by default; the admin
+  /// switches it on (and off again) per user from the web chat. Staff are never restricted.
+  canSendChatImages Boolean @default(false)
+
+  /// Face ID change requests. A student who already has a Face ID can't re-enrol on their own:
+  ///   "none"     - no request open
+  ///   "pending"  - the student asked; waiting for the admin
+  ///   "approved" - the admin said yes; the student may capture a new face ONCE (then back to "none")
+  faceChangeStatus      String    @default("none")
+  faceChangeRequestedAt DateTime?
   forcedLogoutStrikes     Int       @default(0)
   expoPushToken           String?
   expoPushTokenPlatform   String?

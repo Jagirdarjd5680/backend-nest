@@ -155,10 +155,12 @@ export class UsersService {
 
     const enrolledCourseIds = user.enrollments.map((e) => e.courseId.toString());
 
-    const { password, ...safeUser } = user as any;
+    const { password, faceDescriptor, ...safeUser } = user as any;
 
     return {
       ...safeUser,
+      // 128-float vector is never sent to clients; they only need to know one is enrolled.
+      faceRegistered: Array.isArray(faceDescriptor) ? faceDescriptor.length > 0 : !!faceDescriptor,
       _id: user.id.toString(),
       id: user.id,
       enrolledCourses: enrolledCourseIds,

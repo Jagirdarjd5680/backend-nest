@@ -77,10 +77,13 @@ export class EventBookingsService {
     const existing = await this.prisma.eventBooking.findFirst({
       where: { userId, eventId, status: { in: ['confirmed', 'pending_payment'] } },
     });
-    if (existing) {
-      throw new BadRequestException(
-        existing.status === 'confirmed' ? "You're already booked for this event" : 'You already have a pending booking for this event',
-      );
+    if (existing?.status === 'confirmed') {
+      throw new BadRequestException("You're already booked for this event");
+    }
+    // An unpaid checkout the student walked away from: drop it and start a fresh order, otherwise
+    // they could never pay for that event again ("You already have a pending booking").
+    if (existing?.status === 'pending_payment') {
+      await this.prisma.eventBooking.update({ where: { id: existing.id }, data: { status: 'cancelled' } });
     }
 
     if (event.price <= 0) {
@@ -196,9 +199,51 @@ export class EventBookingsService {
     return booking;
   }
 
+  /**
+   * Door check-in: an admin/teacher scans the QR on a student's ticket (its payload is the
+   * ticketCode, e.g. "EVT1-A8460D0F"). Valid only for confirmed bookings and only once — a second
+   * scan of the same ticket is reported as "already used" instead of letting it in twice.
+   */
+  async scanTicket(rawCode: string, scannerId: number) {
+    const ticketCode = String(rawCode ?? '').trim().toUpperCase();
+    if (!ticketCode) throw new BadRequestException('No ticket code in the QR');
+
+    const booking = await this.prisma.eventBooking.findUnique({
+      where: { ticketCode },
+      include: { user: { select: { id: true, name: true, email: true, phone: true, rollNumber: true } }, event: true },
+    });
+    if (!booking) {
+      return { success: false, code: 'INVALID', message: 'Invalid ticket — no booking found for this QR' };
+    }
+
+    const info = {
+      ticketCode,
+      student: booking.user,
+      event: { id: booking.event.id, title: booking.event.title, date: booking.event.date },
+    };
+
+    if (booking.status !== 'confirmed') {
+      return { success: false, code: 'NOT_CONFIRMED', message: `Ticket is not valid (booking ${booking.status.replace('_', ' ')})`, data: info };
+    }
+    if (booking.checkedInAt) {
+      return { success: false, code: 'ALREADY_USED', message: 'Ticket already used', data: { ...info, checkedInAt: booking.checkedInAt } };
+    }
+
+    // Atomic claim: two scanners hitting the same ticket at once can't both succeed.
+    const claimed = await this.prisma.eventBooking.updateMany({
+      where: { id: booking.id, checkedInAt: null },
+      data: { checkedInAt: new Date(), checkedInById: scannerId },
+    });
+    if (claimed.count === 0) {
+      return { success: false, code: 'ALREADY_USED', message: 'Ticket already used', data: info };
+    }
+    console.log(`✅ [EventTicket] checked in ${ticketCode} (${booking.user.name}) for "${booking.event.title}" by user ${scannerId}`);
+    return { success: true, message: 'Ticket verified — entry allowed', data: { ...info, checkedInAt: new Date() } };
+  }
+
   async getMyBookings(userId: number) {
     return this.prisma.eventBooking.findMany({
-      where: { userId, status: { not: 'cancelled' } },
+      where: { userId, status: 'confirmed' },
       include: { event: true },
       orderBy: { createdAt: 'desc' },
     });

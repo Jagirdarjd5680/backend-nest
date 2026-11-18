@@ -10,6 +10,16 @@ model Exam {
   isPublished  Boolean   @default(true)
   moduleId     Int?
   courseId     Int?
+  /// When a course exam opens for a student who bought the course:
+  ///   "immediate"     — as soon as the course is purchased (default)
+  ///   "after_modules" — after `unlockAfterModules` modules are fully completed
+  ///   "after_module"  — after the module at `unlockModuleIndex` (0-based) is fully completed
+  unlockMode         String @default("immediate")
+  unlockAfterDays    Int?
+  unlockAfterModules Int?
+  unlockModuleIndex  Int?
+  /// Serve only this many of the selected questions per student (a stable random pick); null = all.
+  questionCount      Int?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @default(now()) @updatedAt
 
@@ -118,6 +128,8 @@ model Assignment {
   maxMb          Int      @default(10)
   allowedFormats String   @default(".pdf,.zip,.jpg,.png")
   attachments    Json?
+  /// Cover image shown on the assignment (uploaded from the admin form).
+  thumbnail      String?
   isPublished    Boolean  @default(false)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
@@ -125,6 +137,21 @@ model Assignment {
   courseId  Int?
   teacherId Int?
   batchId   Int?
+
+  /// Same rule as Exam: "immediate" | "after_days" | "after_modules" | "after_module"
+  unlockMode         String @default("immediate")
+  unlockAfterDays    Int?
+  unlockAfterModules Int?
+  unlockModuleIndex  Int?
+
+  /// "fixed"           - the single calendar `dueDate` (standalone assignments, legacy rows)
+  /// "days_after_open" - `deadlineDays` days after it opens for that student
+  /// "course_end"      - no deadline: can be submitted any time while the student has the course
+  deadlineMode String @default("fixed")
+  deadlineDays Int?
+
+  /// Question-bank ids of a quiz assignment, in the order the admin picked them ([1, 5, 9]).
+  questionIds Json?
 
   unlocks     AssignmentUnlock[]
   submissions AssignmentSubmission[]

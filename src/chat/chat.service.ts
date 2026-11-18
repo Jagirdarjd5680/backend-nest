@@ -178,8 +178,15 @@ export class ChatService {
   }
 
   async getMyChatStatus(userId: number) {
-    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { isBlockedFromChat: true } });
-    return { success: true, data: { isBlockedFromChat: !!user?.isBlockedFromChat } };
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { isBlockedFromChat: true, canSendChatImages: true, role: true } });
+    return {
+      success: true,
+      data: {
+        isBlockedFromChat: !!user?.isBlockedFromChat,
+        // staff can always send images; everyone else only while the admin has switched it on
+        canSendImages: STAFF_ROLES.includes(user?.role ?? '') || !!user?.canSendChatImages,
+      },
+    };
   }
 
   /**
@@ -195,6 +202,12 @@ export class ChatService {
     }
     if (sender.isBlockedFromChat) {
       throw new ForbiddenException('You have been blocked from chat by the admin.');
+    }
+
+    // Image uploads in the 1:1 admin chat are opt-in: off until the admin allows this user, and off
+    // again the moment the admin disables it. (Tutor sessions - `sessionId` - are not covered.)
+    if (dto.image && !dto.sessionId && !STAFF_ROLES.includes(senderRole) && !sender.canSendChatImages) {
+      throw new ForbiddenException('Sending images is not enabled for your account. Ask the admin to allow it.');
     }
 
     // --- Spam prevention & auto-response logic for students ---
@@ -346,8 +359,8 @@ export class ChatService {
       orderBy: { createdAt: 'desc' },
       take: 100,
       include: {
-        sender: { select: { id: true, name: true, email: true, role: true, avatar: true, isBlockedFromChat: true, lastSeenAt: true } },
-        receiver: { select: { id: true, name: true, email: true, role: true, avatar: true, isBlockedFromChat: true, lastSeenAt: true } },
+        sender: { select: { id: true, name: true, email: true, role: true, avatar: true, isBlockedFromChat: true, canSendChatImages: true, lastSeenAt: true } },
+        receiver: { select: { id: true, name: true, email: true, role: true, avatar: true, isBlockedFromChat: true, canSendChatImages: true, lastSeenAt: true } },
       },
     });
 
@@ -403,7 +416,7 @@ export class ChatService {
     return this.prisma.user.findFirst({
       where: { role: 'admin', isActive: true, id: { not: excludeUserId } },
       orderBy: { id: 'asc' },
-      select: { id: true, name: true, email: true, role: true, avatar: true, isBlockedFromChat: true, lastSeenAt: true },
+      select: { id: true, name: true, email: true, role: true, avatar: true, isBlockedFromChat: true, canSendChatImages: true, lastSeenAt: true },
     });
   }
 
@@ -424,7 +437,7 @@ export class ChatService {
   async getUserSummary(targetUserId: number) {
     const user = await this.prisma.user.findUnique({
       where: { id: targetUserId },
-      select: { id: true, name: true, role: true, avatar: true, lastSeenAt: true, isBlockedFromChat: true },
+      select: { id: true, name: true, role: true, avatar: true, lastSeenAt: true, isBlockedFromChat: true, canSendChatImages: true },
     });
     if (!user) throw new NotFoundException('User not found');
     const { lastSeenAt, ...rest } = user;
@@ -450,6 +463,28 @@ export class ChatService {
       success: true,
       message: isBlockedFromChat ? 'User blocked from chat' : 'User unblocked from chat',
       isBlockedFromChat,
+    };
+  }
+
+  /**
+   * Admin-only: allow / stop this user from sending images in chat. Pushed live (socket) so the
+   * user's image button enables or disables on their screen immediately, without a refresh.
+   * `allowed` omitted = flip the current value.
+   */
+  async setImagePermission(targetUserId: number, allowed?: boolean) {
+    const user = await this.prisma.user.findUnique({ where: { id: targetUserId }, select: { canSendChatImages: true } });
+    if (!user) throw new NotFoundException('User not found');
+
+    const canSendChatImages = typeof allowed === 'boolean' ? allowed : !user.canSendChatImages;
+    await this.prisma.user.update({ where: { id: targetUserId }, data: { canSendChatImages } });
+
+    this.chatGateway.server.emit('chat_image_permission', { userId: targetUserId, canSendImages: canSendChatImages });
+    console.log(`[ChatService] image upload ${canSendChatImages ? 'ENABLED' : 'DISABLED'} for user ${targetUserId}`);
+
+    return {
+      success: true,
+      message: canSendChatImages ? 'User can now send images' : 'Image sending turned off for this user',
+      canSendChatImages,
     };
   }
 

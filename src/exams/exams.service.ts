@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CourseProgressService } from '../course-progress/course-progress.service';
+import { UnlockContext, evaluateUnlock, unlockFieldsFromBody } from '../common/course-unlock';
 
 // Exam ↔ Question is many-to-many through ExamQuestion. Include the links and flatten them
 // back to `exam.questions` so every API consumer (web, mobile, results) keeps its old shape.
@@ -23,12 +24,47 @@ const hideAnswers = <T extends { questions: any[] }>(exam: T): T => ({
   questions: exam.questions.map(({ correctOption, explanation, ...q }) => q),
 });
 
+/** Stable per-student pick of `count` questions (same student + exam gives the same questions every load). */
+const pickSubset = <T extends { id: number }>(questions: T[], count: number | null | undefined, seed: string): T[] => {
+  if (!count || count <= 0 || count >= questions.length) return questions;
+  const rank = (id: number) => {
+    let h = 2166136261;
+    for (const ch of `${seed}:${id}`) h = Math.imul(h ^ ch.charCodeAt(0), 16777619);
+    return h >>> 0;
+  };
+  return [...questions].sort((a, b) => rank(a.id) - rank(b.id)).slice(0, count);
+};
+
 @Injectable()
 export class ExamsService {
   constructor(
     private prisma: PrismaService,
     private courseProgressService: CourseProgressService,
   ) {}
+
+  /** Whether this exam is still closed for the student, and why (the app shows the reason). */
+  private async lockInfo(
+    exam: { id: number; courseId: number | null; moduleId: number | null; unlockMode: string; unlockAfterDays: number | null; unlockAfterModules: number | null; unlockModuleIndex: number | null },
+    studentId: number,
+    ctx: UnlockContext,
+    unlockedExamIds: Set<number>,
+  ): Promise<{ locked: boolean; reason: string | null }> {
+    if (exam.unlockMode !== 'immediate') return evaluateUnlock(this.prisma, exam, studentId, exam.courseId, ctx);
+    // "immediate": opens with the course. A legacy exam pinned to a module still needs an ExamUnlock row.
+    if (exam.moduleId && !unlockedExamIds.has(exam.id)) return { locked: true, reason: 'This exam has not been unlocked yet' };
+    return { locked: false, reason: null };
+  }
+
+  /** Unlock rule + question count from a create/update body (only keys that were actually sent). */
+  private unlockFields(data: any) {
+    const out: Record<string, any> = unlockFieldsFromBody(data);
+    const int = (v: any) => (v === '' || v === null || v === undefined || Number.isNaN(Number(v)) ? null : Math.trunc(Number(v)));
+    if (data && 'questionCount' in data) {
+      const n = int(data.questionCount);
+      out.questionCount = n && n > 0 ? n : null;
+    }
+    return out;
+  }
 
   async findAllExams(userId?: number, role?: string, courseFilterId?: number) {
     let whereClause: any = { isPublished: true };
@@ -86,22 +122,34 @@ export class ExamsService {
       });
     }
 
-    const data = exams.map((e) => {
-      const unlockRecord = unlocks.find((u) => u.examId === e.id);
-      const result = studentResults.find((r) => r.examId === e.id);
+    const unlockedExamIds = new Set<number>(unlocks.map((u) => u.examId));
+    const unlockCtx = new UnlockContext();
+    const isStudentView = role === 'student' && !!userId;
 
-      const isSubmitted = !!result;
-      const isLocked = e.moduleId ? !unlockRecord : false;
+    const data = await Promise.all(
+      exams.map(async (e) => {
+        const unlockRecord = unlocks.find((u) => u.examId === e.id);
+        const result = studentResults.find((r) => r.examId === e.id);
 
-      return {
-        ...e,
-        _id: e.id.toString(),
-        isSubmitted,
-        userResult: result ? { ...result, _id: result.id.toString() } : null,
-        isLocked,
-        unlockedAt: unlockRecord ? unlockRecord.unlockedAt : null,
-      };
-    });
+        const isSubmitted = !!result;
+        const lock = isStudentView
+          ? await this.lockInfo(e, userId!, unlockCtx, unlockedExamIds)
+          : { locked: e.moduleId ? !unlockRecord && e.unlockMode === 'immediate' : false, reason: null as string | null };
+        // Students only get their own stable subset of the questions.
+        const questions = isStudentView ? pickSubset(e.questions, e.questionCount, `${userId}:${e.id}`) : e.questions;
+
+        return {
+          ...e,
+          questions,
+          _id: e.id.toString(),
+          isSubmitted,
+          userResult: result ? { ...result, _id: result.id.toString() } : null,
+          isLocked: lock.locked,
+          lockReason: lock.reason,
+          unlockedAt: unlockRecord ? unlockRecord.unlockedAt : null,
+        };
+      }),
+    );
 
     return {
       success: true,
@@ -125,11 +173,16 @@ export class ExamsService {
       if (!enrollment) {
         throw new ForbiddenException('Not enrolled in a course that provides this exam');
       }
+      const unlocks = await this.prisma.examUnlock.findMany({ where: { studentId: userId, examId: id }, select: { examId: true } });
+      const lock = await this.lockInfo(exam, userId, new UnlockContext(), new Set(unlocks.map((u) => u.examId)));
+      if (lock.locked) throw new ForbiddenException(lock.reason || 'This exam is locked');
     }
+
+    const questions = role === 'student' && userId ? pickSubset(exam.questions, exam.questionCount, `${userId}:${exam.id}`) : exam.questions;
 
     return {
       success: true,
-      data: { ...exam, _id: exam.id.toString() },
+      data: { ...exam, questions, _id: exam.id.toString() },
     };
   }
 
@@ -145,6 +198,7 @@ export class ExamsService {
         endDate: data.endDate ? new Date(data.endDate) : undefined,
         courseId: data.courseId ? parseInt(data.courseId, 10) : undefined,
         moduleId: data.moduleId ? parseInt(data.moduleId, 10) : undefined,
+        ...this.unlockFields(data),
         createdBy: userId,
         isPublished: data.isPublished !== undefined ? !!data.isPublished : true,
       },
@@ -180,6 +234,7 @@ export class ExamsService {
         // lets `courseId: null` really persist as null, while an omitted key still no-ops.
         courseId: 'courseId' in data ? (data.courseId === null ? null : parseInt(data.courseId, 10)) : undefined,
         moduleId: data.moduleId ? parseInt(data.moduleId, 10) : undefined,
+        ...this.unlockFields(data),
         isPublished: data.isPublished !== undefined ? !!data.isPublished : undefined,
       },
     });
@@ -227,6 +282,10 @@ export class ExamsService {
     });
     const exam = row ? flattenQuestions(row) : null;
     if (!exam) throw new NotFoundException(`Exam with ID ${dto.examId} not found`);
+
+    const unlocked = await this.prisma.examUnlock.findMany({ where: { studentId, examId: exam.id }, select: { examId: true } });
+    const lock = await this.lockInfo(exam, studentId, new UnlockContext(), new Set(unlocked.map((u) => u.examId)));
+    if (lock.locked) throw new ForbiddenException(lock.reason || 'This exam is locked');
 
     let totalScore = 0;
     for (const ans of dto.answers || []) {

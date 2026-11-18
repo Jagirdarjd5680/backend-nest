@@ -1,6 +1,7 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CourseProgressService } from '../course-progress/course-progress.service';
+import { DAY_MS, UnlockContext, evaluateUnlock, openedAt, unlockFieldsFromBody } from '../common/course-unlock';
 
 @Injectable()
 export class AssignmentsService {
@@ -11,19 +12,105 @@ export class AssignmentsService {
     private courseProgressService: CourseProgressService,
   ) {}
 
+  /** Fields every student-facing payload adds: lock state, when it opened, and the personal deadline. */
+  private async studentView(a: any, user: { id: number; role?: string }, ctx: UnlockContext) {
+    const lock = await evaluateUnlock(this.prisma, a, user.id, a.courseId, ctx);
+    let unlockedAt: Date | null = null;
+    if (!lock.locked && a.courseId) {
+      unlockedAt = await openedAt(this.prisma, a, user.id, a.courseId, ctx, async () => {
+        const existing = await this.prisma.assignmentUnlock.findFirst({ where: { studentId: user.id, assignmentId: a.id } });
+        if (existing) return existing.unlockedAt;
+        return (await this.prisma.assignmentUnlock.create({ data: { studentId: user.id, assignmentId: a.id } })).unlockedAt;
+      });
+    }
+    const mode = a.deadlineMode || 'fixed';
+    let deadline: Date | null = null;
+    if (mode === 'fixed') deadline = a.dueDate ?? null;
+    else if (mode === 'days_after_open' && unlockedAt && a.deadlineDays) deadline = new Date(unlockedAt.getTime() + a.deadlineDays * DAY_MS);
+    return {
+      isLocked: lock.locked,
+      lockReason: lock.reason,
+      unlockedAt,
+      deadline,
+      deadlineDays: mode === 'days_after_open' ? a.deadlineDays ?? 0 : 0,
+      noDeadline: mode === 'course_end',
+    };
+  }
+
+  /** Form settings (marks, type, upload limits, attachments, published) from a create/update body. */
+  private settingsFields(data: any) {
+    const out: Record<string, any> = {};
+    const num = (v: any) => (v === '' || v === null || v === undefined || Number.isNaN(Number(v)) ? undefined : Number(v));
+    if (num(data.totalMarks) !== undefined) out.totalMarks = num(data.totalMarks);
+    if (typeof data.assignmentType === 'string' && data.assignmentType) out.assignmentType = data.assignmentType;
+    if (num(data.maxMb) !== undefined) out.maxMb = Math.trunc(num(data.maxMb)!);
+    if (typeof data.allowedFormats === 'string' && data.allowedFormats) out.allowedFormats = data.allowedFormats;
+    if (Array.isArray(data.attachments)) out.attachments = data.attachments;
+    // '' clears the cover image, undefined leaves it alone.
+    if (typeof data.thumbnail === 'string') out.thumbnail = data.thumbnail || null;
+    if (typeof data.isPublished === 'boolean') out.isPublished = data.isPublished;
+    return out;
+  }
+
+  /** Deadline / lock fields written by the admin form (only keys that were actually sent). */
+  private deadlineFields(data: any) {
+    const out: Record<string, any> = {};
+    if (!data || !('deadlineMode' in data)) return out;
+    const mode = ['fixed', 'days_after_open', 'course_end'].includes(data.deadlineMode) ? data.deadlineMode : 'fixed';
+    const days = Number(data.deadlineDays);
+    out.deadlineMode = mode;
+    out.deadlineDays = mode === 'days_after_open' && Number.isFinite(days) && days > 0 ? Math.trunc(days) : null;
+    // `dueDate` is NOT NULL in the table: a course assignment gets a far-future placeholder (the real
+    // deadline is computed per student), so old screens never show a bogus "overdue".
+    if (mode !== 'fixed' && !data.dueDate) out.dueDate = new Date(Date.now() + 5 * 365 * DAY_MS);
+    return out;
+  }
+
+  /** The quiz questions of an assignment (answer key only for staff), in the admin's order. */
+  private async questionsFor(a: { questionIds?: unknown }, isStaff: boolean) {
+    const ids = Array.isArray(a.questionIds) ? (a.questionIds as any[]).map((n) => Number(n)).filter((n) => Number.isInteger(n)) : [];
+    if (ids.length === 0) return [];
+    const rows = await this.prisma.question.findMany({ where: { id: { in: ids }, isDeleted: false } });
+    const byId = new Map(rows.map((q) => [q.id, q]));
+    return ids
+      .map((id) => byId.get(id))
+      .filter((q): q is NonNullable<typeof q> => !!q)
+      .map(({ correctOption, explanation, ...q }) => (isStaff ? { ...q, correctOption, explanation, _id: q.id.toString() } : { ...q, _id: q.id.toString() }));
+  }
+
+  /** "Select questions" on a quiz assignment (admin/teacher): replaces its question list. */
+  async setAssignmentQuestions(id: number, questionIds: any[]) {
+    const existing = await this.prisma.assignment.findUnique({ where: { id }, select: { id: true } });
+    if (!existing) throw new NotFoundException(`Assignment with ID ${id} not found`);
+    const wanted = (Array.isArray(questionIds) ? questionIds : []).map((n) => parseInt(String(n), 10)).filter((n) => Number.isInteger(n));
+    const valid = await this.prisma.question.findMany({ where: { id: { in: wanted }, isDeleted: false }, select: { id: true } });
+    const validSet = new Set(valid.map((q) => q.id));
+    const ordered = [...new Set(wanted)].filter((n) => validSet.has(n));
+    await this.prisma.assignment.update({ where: { id }, data: { questionIds: ordered } });
+    return { success: true, data: { assignmentId: id, questionIds: ordered } };
+  }
+
   // Assignment CRUD
-  async findAllAssignments(courseId?: number) {
+  async findAllAssignments(courseId?: number, user?: { id: number; role?: string }) {
     const items = await this.prisma.assignment.findMany({
       where: courseId ? { courseId } : undefined,
       orderBy: { createdAt: 'desc' },
     });
-    return {
-      success: true,
-      data: items.map((i) => ({ ...i, _id: i.id.toString() })),
-    };
+    const isStudent = user?.role === 'student';
+    const ctx = new UnlockContext();
+    const data = await Promise.all(
+      items.map(async (i) => {
+        // Staff see everything; a student sees the lock state and personal deadline of their own course progress.
+        const questions = await this.questionsFor(i, !isStudent);
+        if (!isStudent) return { ...i, _id: i.id.toString(), isLocked: false, lockReason: null, questions };
+        const view = await this.studentView(i, user!, ctx);
+        return { ...i, _id: i.id.toString(), ...view, questions };
+      }),
+    );
+    return { success: true, data };
   }
 
-  async findOneAssignment(id: number) {
+  async findOneAssignment(id: number, user?: { id: number; role?: string }) {
     const item = await this.prisma.assignment.findUnique({
       where: { id },
       include: {
@@ -35,11 +122,18 @@ export class AssignmentsService {
     });
     if (!item) throw new NotFoundException(`Assignment with ID ${id} not found`);
     const { submissions, ...assignment } = item;
+    let view: Record<string, any> = { isLocked: false, lockReason: null };
+    if (user?.role === 'student') {
+      view = await this.studentView(assignment, user, new UnlockContext());
+      if (view.isLocked) throw new ForbiddenException(view.lockReason || 'This assignment is locked');
+    }
     return {
       success: true,
       data: {
         ...assignment,
         _id: assignment.id.toString(),
+        ...view,
+        questions: await this.questionsFor(assignment, user?.role !== 'student'),
         submissions: submissions.map((s) => ({ ...s, _id: s.id.toString() })),
       },
     };
@@ -178,7 +272,14 @@ export class AssignmentsService {
   async submitAssignment(assignmentId: number, studentId: number, data: any) {
     console.log(`🐛 [AssignmentUpload] assignmentId=${assignmentId} studentId=${studentId} fileUrl=${data?.fileUrl} textAnswer=${data?.textAnswer ? '(present)' : '(empty)'}`);
     try {
-      const assignment = await this.findOneAssignment(assignmentId);
+      const assignment = await this.findOneAssignment(assignmentId, { id: studentId, role: 'student' });
+
+      // "N days after it opens" deadlines are enforced; "course_end" never expires.
+      const info: any = assignment.data;
+      const dl = info.deadline ? new Date(info.deadline) : null;
+      if (info.deadlineMode === 'days_after_open' && dl && Date.now() > dl.getTime()) {
+        throw new ForbiddenException('The deadline for this assignment has passed');
+      }
 
       const submission = await this.prisma.assignmentSubmission.create({
         data: {
@@ -248,6 +349,10 @@ export class AssignmentsService {
         description: data.description || '',
         filePath: data.filePath || '',
         dueDate: data.dueDate ? new Date(data.dueDate) : new Date(),
+        courseId: data.courseId ? parseInt(data.courseId, 10) : undefined,
+        ...unlockFieldsFromBody(data),
+        ...this.deadlineFields(data),
+        ...this.settingsFields(data),
       },
     });
     return {
@@ -269,6 +374,9 @@ export class AssignmentsService {
         // an assignment from a course — actually persists instead of being treated the same
         // as "field not sent" and silently no-op'd.
         courseId: 'courseId' in data ? (data.courseId === null ? null : parseInt(data.courseId, 10)) : undefined,
+        ...unlockFieldsFromBody(data),
+        ...this.deadlineFields(data),
+        ...this.settingsFields(data),
       },
     });
     return {

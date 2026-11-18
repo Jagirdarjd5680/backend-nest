@@ -5,7 +5,7 @@ import { ExpoPushService } from '../notifications/expo-push.service';
 import * as PDFDocument from 'pdfkit';
 import * as fs from 'fs';
 import * as path from 'path';
-import { drawInvoice, InvoiceCompany } from '../common/pdf/invoiceTemplate';
+import { drawInvoice, InvoiceCompany, pdfColors } from '../common/pdf/invoiceTemplate';
 import { drawRegistrationLetter } from '../common/pdf/registrationLetterTemplate';
 
 type PaymentEntry = { amount: number; method: string; note?: string; paidAt: string | Date };
@@ -30,7 +30,7 @@ export class FeeRecordsService {
       phone: settings?.company?.contact || '',
       email: settings?.company?.email ? String(settings.company.email).split('\n')[0] : '',
       logo: settings?.general?.pdfLogo || settings?.general?.siteLogo || '',
-      primaryColor: settings?.theme?.primaryColor || '#f39c12',
+      ...pdfColors(settings?.pdfSettings),
     };
   }
 

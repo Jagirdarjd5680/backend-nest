@@ -68,17 +68,19 @@ export class AssignmentsController {
 
   // ─── General CRUD ──────────────────────────────────────────────────────────
 
+  @UseGuards(JwtAuthGuard)
   @Get()
-  async findAll(@Query('course') course?: string) {
+  async findAll(@Request() req: any, @Query('course') course?: string) {
     const courseId = course ? parseInt(course, 10) : undefined;
-    return this.service.findAllAssignments(courseId);
+    return this.service.findAllAssignments(courseId, req.user);
   }
 
+  @UseGuards(JwtAuthGuard)
   @Get(':id')
-  async findOne(@Param('id') id: string) {
+  async findOne(@Param('id') id: string, @Request() req: any) {
     const numId = parseInt(id, 10);
     if (isNaN(numId)) return { success: false, message: 'Invalid ID' };
-    return this.service.findOneAssignment(numId);
+    return this.service.findOneAssignment(numId, req.user);
   }
 
   // ─── Protected Mutations ───────────────────────────────────────────────────
@@ -121,6 +123,16 @@ export class AssignmentsController {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
+  // "Select questions" on a quiz assignment. Ahead of ':id' so "questions" isn't read as an id.
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin', 'teacher')
+  @Put(':id/questions')
+  async setQuestions(@Param('id') id: string, @Body('questionIds') questionIds: any[]) {
+    const numId = parseInt(id, 10);
+    if (isNaN(numId)) return { success: false, message: 'Invalid ID' };
+    return this.service.setAssignmentQuestions(numId, questionIds);
+  }
+
   @Put(':id')
   @Roles('admin', 'teacher')
   async updatePut(@Param('id') id: string, @Body() data: UpdateAssignmentDto) {

@@ -36,7 +36,7 @@ async function loadLogo(logo?: string): Promise<Buffer | string | null> {
 /** Draws a registration/admission confirmation letter onto an already-created pdfkit document. */
 export async function drawRegistrationLetter(doc: PDFKit.PDFDocument, data: RegistrationLetterData): Promise<void> {
   registerFonts(doc);
-  const primary = data.company.primaryColor || '#f39c12';
+  const primary = data.company.primaryColor || '#3f51b5';
 
   // ─── Header (same treatment as the invoice, for a consistent letterhead) ─
   doc.fillColor('#1a1a2e').font(FONT_BOLD).fontSize(18).text(data.company.name.toUpperCase(), 40, 40);

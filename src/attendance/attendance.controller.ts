@@ -38,6 +38,27 @@ export class AttendanceController {
     return this.service.markManual(batchId, studentId, body.status === 'absent' ? 'absent' : 'present');
   }
 
+  @Get('face/me')
+  async myFace(@Request() req: any) {
+    return this.service.getMyFace(Number(req.user.id));
+  }
+
+  @Post('face/request-change')
+  async requestFaceChange(@Request() req: any) {
+    return this.service.requestFaceChange(Number(req.user.id));
+  }
+
+  /** Admin decision on a student's Face ID change request. Body `{ action: 'approve' | 'reject' }`. */
+  @Patch('face/change/:userId')
+  @UseGuards(RolesGuard)
+  @Roles('admin')
+  async resolveFaceChange(@Param('userId') userId: string, @Body() body: { action?: string }) {
+    const id = parseInt(userId, 10);
+    if (isNaN(id)) throw new BadRequestException('Invalid user id');
+    if (body?.action !== 'approve' && body?.action !== 'reject') throw new BadRequestException('action must be "approve" or "reject"');
+    return this.service.resolveFaceChange(id, body.action);
+  }
+
   @Get('user/:userId')
   async findByUser(@Param('userId') userId: string, @Request() req: any) {
     const numId = parseInt(userId, 10);
@@ -73,6 +94,9 @@ export class AttendanceController {
     this.logger.debug(
       `enroll-face: caller=${req.user?.id} role=${req.user?.role} isAdmin=${isAdmin} bodyUserId=${body.userId} -> targetUserId=${targetUserId} imageLen=${body.imageBase64?.length || 0}`,
     );
+    // A student's own capture goes through the change-request rules (first Face ID free, a change
+    // only after the admin approved it). Admin-assisted enrolment is unrestricted.
+    if (!isAdmin) return this.service.enrollOwnFace(targetUserId, body.imageBase64);
     return this.service.enrollFace(targetUserId, body.imageBase64);
   }
 

@@ -1,6 +1,6 @@
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
-import { Controller, Get, Post, Put, Patch, Delete, Param, Body, UseGuards, Res, Request } from '@nestjs/common';
+import { Controller, Get, Post, Put, Patch, Delete, Param, Body, Query, UseGuards, Res, Request } from '@nestjs/common';
 import { FeeRecordsService } from './fee-records.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Response } from 'express';
@@ -43,6 +43,24 @@ export class FeeRecordsController {
   async sendRegistrationLetter(@Request() req: any, @Body() body: { userId?: number; courseId?: number }) {
     const targetUserId = body.userId || req.user.id;
     return this.service.sendRegistrationLetterEmail(targetUserId, body.courseId);
+  }
+
+  /** Fee Records page "Download receipt": the student's latest payment (or `?paymentIndex=`) as a PDF. */
+  @Get('receipt/:userId')
+  @UseGuards(RolesGuard)
+  @Roles('admin', 'teacher')
+  async receiptForStudent(
+    @Param('userId') userId: string,
+    @Query('courseId') courseId: string | undefined,
+    @Query('paymentIndex') paymentIndex: string | undefined,
+    @Res() res: Response,
+  ) {
+    const { filePath, fileName } = await this.service.generateReceiptPdf(
+      parseInt(userId, 10),
+      courseId ? parseInt(courseId, 10) : undefined,
+      paymentIndex !== undefined && paymentIndex !== '' ? parseInt(paymentIndex, 10) : undefined,
+    );
+    return res.download(filePath, fileName);
   }
 
   @Get('user/:userId')

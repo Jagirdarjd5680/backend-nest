@@ -27,6 +27,14 @@ export class EventBookingsController {
     return this.service.verifyPayment(req.user.id, parseInt(eventId, 10), body);
   }
 
+  /** Ticket QR scanner (admin / teacher). Declared before the `:id` routes. */
+  @Post('scan')
+  @UseGuards(RolesGuard)
+  @Roles('admin', 'teacher')
+  async scan(@Body() body: { ticketCode?: string; ticketId?: string }, @Request() req: any) {
+    return this.service.scanTicket(body.ticketCode ?? body.ticketId ?? '', req.user.id);
+  }
+
   @Get('my-bookings')
   async getMyBookings(@Request() req: any) {
     return this.service.getMyBookings(req.user.id);

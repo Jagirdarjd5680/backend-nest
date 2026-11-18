@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { FaceMatch, FaceRecognitionService } from './face-recognition.service';
 
@@ -154,11 +154,98 @@ export class AttendanceService {
       throw new BadRequestException('No face detected in the photo — please try again.');
     }
 
-    const updated = await this.prisma.user.update({ where: { id: userId }, data: { faceDescriptor: descriptor } });
+    const updated = await this.prisma.user.update({
+      where: { id: userId },
+      // a new face closes any open change request
+      data: { faceDescriptor: descriptor, faceChangeStatus: 'none', faceChangeRequestedAt: null },
+    });
     this.logger.debug(
       `enrollFace: saved faceDescriptor for userId=${userId} (${updated.name}) — stored length=${Array.isArray(updated.faceDescriptor) ? (updated.faceDescriptor as any[]).length : 'n/a'}`,
     );
     return { success: true, message: 'Face enrolled successfully' };
+  }
+
+  // ─── Face ID: view / request a change / admin decision ───────────────────
+
+  private hasDescriptor(v: unknown): boolean {
+    return Array.isArray(v) ? v.length > 0 : !!v;
+  }
+
+  /** The student's own Face ID state: is one enrolled, its thumbnail, and where a change request stands. */
+  async getMyFace(userId: number) {
+    const u = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { faceDescriptor: true, studentProfile: true, faceChangeStatus: true, faceChangeRequestedAt: true },
+    });
+    if (!u) throw new NotFoundException('User not found');
+    const profile = (u.studentProfile as Record<string, any> | null) || {};
+    return {
+      success: true,
+      data: {
+        hasFace: this.hasDescriptor(u.faceDescriptor),
+        image: profile.biometricFace || null,
+        status: u.faceChangeStatus, // none | pending | approved
+        requestedAt: u.faceChangeRequestedAt,
+      },
+    };
+  }
+
+  /** "Request to change Face ID" - one open request at a time, and only if a Face ID exists. */
+  async requestFaceChange(userId: number) {
+    const u = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { faceDescriptor: true, faceChangeStatus: true },
+    });
+    if (!u) throw new NotFoundException('User not found');
+    if (!this.hasDescriptor(u.faceDescriptor)) {
+      return { success: false, code: 'NO_FACE', message: 'You have no Face ID yet - you can register it directly.' };
+    }
+    if (u.faceChangeStatus === 'pending') {
+      return { success: false, code: 'PENDING', message: 'Your request is pending - the admin has not answered yet.', status: 'pending' };
+    }
+    if (u.faceChangeStatus === 'approved') {
+      return { success: false, code: 'APPROVED', message: 'Already approved - you can capture your new Face ID now.', status: 'approved' };
+    }
+    await this.prisma.user.update({ where: { id: userId }, data: { faceChangeStatus: 'pending', faceChangeRequestedAt: new Date() } });
+    this.logger.log(`Face ID change requested by user ${userId}`);
+    return { success: true, message: 'Request sent to the admin', status: 'pending' };
+  }
+
+  /** Admin: approve (student may re-capture once) or reject (request closed) a change request. */
+  async resolveFaceChange(userId: number, action: 'approve' | 'reject') {
+    const u = await this.prisma.user.findUnique({ where: { id: userId }, select: { faceChangeStatus: true } });
+    if (!u) throw new NotFoundException('User not found');
+    if (action === 'approve') {
+      await this.prisma.user.update({ where: { id: userId }, data: { faceChangeStatus: 'approved' } });
+      return { success: true, message: 'Approved - the student can capture a new Face ID once', status: 'approved' };
+    }
+    await this.prisma.user.update({ where: { id: userId }, data: { faceChangeStatus: 'none', faceChangeRequestedAt: null } });
+    return { success: true, message: 'Request rejected', status: 'none' };
+  }
+
+  /**
+   * A student capturing their OWN Face ID. First time: always allowed. After that only while an
+   * admin-approved change is open - and it is used up by this one capture, so a second change
+   * needs a new request. Also stores the photo as the thumbnail shown in the profile.
+   */
+  async enrollOwnFace(userId: number, imageBase64: string) {
+    const u = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { faceDescriptor: true, faceChangeStatus: true, studentProfile: true },
+    });
+    if (!u) throw new NotFoundException('User not found');
+    if (this.hasDescriptor(u.faceDescriptor) && u.faceChangeStatus !== 'approved') {
+      throw new ForbiddenException(
+        u.faceChangeStatus === 'pending'
+          ? 'Your change request is still pending with the admin.'
+          : 'Your Face ID is already registered. Send a change request to the admin first.',
+      );
+    }
+    const result = await this.enrollFace(userId, imageBase64); // also resets faceChangeStatus -> none
+    const profile = (u.studentProfile as Record<string, any> | null) || {};
+    const thumb = imageBase64.startsWith('data:') ? imageBase64 : `data:image/jpeg;base64,${imageBase64}`;
+    await this.prisma.user.update({ where: { id: userId }, data: { studentProfile: { ...profile, biometricFace: thumb } } });
+    return result;
   }
 
   /**

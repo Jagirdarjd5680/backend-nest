@@ -21,6 +21,14 @@ export class EventsController {
     return this.service.findAll();
   }
 
+  /** Admin "View registrations": students with a confirmed ticket. Ahead of ':id'. */
+  @Get(':id/enrolled')
+  @UseGuards(RolesGuard)
+  @Roles('admin', 'teacher')
+  async enrolled(@Param('id') id: string) {
+    return this.service.getEnrolled(parseInt(id, 10));
+  }
+
   @Get(':id')
   async findOne(@Param('id') id: string) {
     return this.service.findOne(parseInt(id, 10));

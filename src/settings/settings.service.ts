@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import * as PDFDocument from 'pdfkit';
 import { PrismaService } from '../prisma/prisma.service';
-import { drawInvoice, InvoiceCompany } from '../common/pdf/invoiceTemplate';
+import { drawInvoice, InvoiceCompany, pdfColors } from '../common/pdf/invoiceTemplate';
 import { drawRegistrationLetter } from '../common/pdf/registrationLetterTemplate';
 import { drawCertificate, certificateBranding } from '../common/pdf/certificateTemplate';
 
@@ -258,10 +258,31 @@ export class SettingsService {
   // fallbacks; AISettings.jsx's per-provider model picker is the real source of truth, and
   // whatever the admin selects there is what actually gets used below.
   private defaultAiModel(normalizedProvider: string): string {
-    if (normalizedProvider === 'openai') return 'gpt-3.5-turbo';
+    if (normalizedProvider === 'openai') return 'gpt-4o-mini';
     if (normalizedProvider === 'gemini') return 'gemini-2.0-flash';
     if (normalizedProvider === 'anthropic') return 'claude-3-5-haiku-20241022';
     return '';
+  }
+
+  // Models the providers have retired (they answer 404 "has been deprecated"). A config saved
+  // before the retirement keeps the old name forever, so map each to its current replacement
+  // instead of making the admin hunt down why the chat/test suddenly fails.
+  private static readonly RETIRED_MODELS: Record<string, string> = {
+    'gpt-3.5-turbo': 'gpt-4o-mini',
+    'gpt-3.5-turbo-16k': 'gpt-4o-mini',
+    'gpt-4': 'gpt-4o',
+    'gpt-4-turbo': 'gpt-4o',
+    'gemini-1.5-flash': 'gemini-2.0-flash',
+    'gemini-1.5-flash-8b': 'gemini-2.0-flash',
+    'gemini-pro': 'gemini-2.0-flash',
+  };
+
+  private currentAiModel(model: string | undefined, normalizedProvider: string): string {
+    const wanted = (model || '').trim();
+    if (!wanted) return this.defaultAiModel(normalizedProvider);
+    const upgraded = SettingsService.RETIRED_MODELS[wanted];
+    if (upgraded) console.warn(`⚠️ [AI] model "${wanted}" is retired — using "${upgraded}" instead (change it in Settings > AI)`);
+    return upgraded ?? wanted;
   }
 
   async testAiConnectivity(provider: string, apiKey?: string, model?: string) {
@@ -270,7 +291,7 @@ export class SettingsService {
     if (!key) {
       return { success: false, provider, message: `API Key for ${provider} is not configured.` };
     }
-    const useModel = model || this.defaultAiModel(normalized);
+    const useModel = this.currentAiModel(model, normalized);
 
     try {
       if (normalized === 'openai') {
@@ -307,7 +328,7 @@ export class SettingsService {
     if (!message?.trim()) {
       throw new Error('Message is required.');
     }
-    const useModel = model || this.defaultAiModel(normalized);
+    const useModel = this.currentAiModel(model, normalized);
 
     if (normalized === 'openai') {
       const OpenAI = require('openai');
@@ -364,7 +385,7 @@ export class SettingsService {
       phone: all?.company?.contact || '8905561612',
       email: all?.company?.email ? String(all.company.email).split('\n')[0] : 'godofgraphic24@gmail.com',
       logo: all?.general?.pdfLogo || all?.general?.siteLogo || '',
-      primaryColor: all?.theme?.primaryColor || '#f39c12',
+      ...pdfColors(all?.pdfSettings),
     };
 
     return new Promise((resolve, reject) => {

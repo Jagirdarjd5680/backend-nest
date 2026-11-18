@@ -1,4 +1,4 @@
-import { IsArray, IsDateString, IsNotEmpty, IsNumber, IsOptional, IsString } from 'class-validator';
+import { IsArray, IsDateString, IsIn, IsNotEmpty, IsNumber, IsOptional, IsString } from 'class-validator';
 import { Transform } from 'class-transformer';
 
 /** HTML forms send numbers as strings and unset selects as '' — coerce both before validating. */
@@ -48,6 +48,32 @@ export class CreateExamDto {
   @IsNumber()
   @IsOptional()
   moduleId?: number;
+
+  /** immediate | after_modules | after_module - see Exam.unlockMode in the Prisma schema. */
+  @IsString()
+  @IsIn(['immediate', 'after_days', 'after_modules', 'after_module'])
+  @IsOptional()
+  unlockMode?: string;
+
+  @OptNumber()
+  @IsNumber()
+  @IsOptional()
+  unlockAfterDays?: number;
+
+  @OptNumber()
+  @IsNumber()
+  @IsOptional()
+  unlockAfterModules?: number;
+
+  @OptNumber()
+  @IsNumber()
+  @IsOptional()
+  unlockModuleIndex?: number;
+
+  @OptNumber()
+  @IsNumber()
+  @IsOptional()
+  questionCount?: number;
 }
 
 export class SubmitExamDto {
